@@ -128,7 +128,7 @@ LABELS = {
     "ddr":                "DDR provision",
     "withd":              "Withdrawal provision",
     "pp":                 "Power-sharing (political)",
-    "intgov":             "Interim government",
+    "intgov":             "Integration into government",
     "intciv":             "Civilian power-sharing",
     "elections":          "Elections provision",
     "interim":            "Interim arrangements",

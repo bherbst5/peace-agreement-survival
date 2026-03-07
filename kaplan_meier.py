@@ -8,7 +8,7 @@ Seven plots produced in a 4-row layout:
   Row 1: Overall | By incompatibility type
   Row 2: By agreement type | By region
   Row 3: By shaloc (local/regional autonomy provision) | By PKO presence
-  Row 4: By intgov (interim government provision)  [full width]
+  Row 4: By intgov (integration of rebels into government provision)  [full width]
 """
 
 import numpy as np
@@ -132,13 +132,25 @@ def binary_km(ax, df, col, labels, colors, title):
 # ── load data ─────────────────────────────────────────────────────────────────
 
 df = pd.read_excel("PAD_final.xlsx")
+df["censor_point"] = pd.to_datetime(df["censor_point"])
+df["pa_date"]      = pd.to_datetime(df["pa_date"])
+
+censored_mask = df["ended"].isna() | (df["ended"] != 1)
+df.loc[censored_mask, "span_days"] = (
+    df.loc[censored_mask, "censor_point"]
+    - df.loc[censored_mask, "pa_date"]
+).dt.days
+
+df["ended"] = df["ended"].fillna(0)
+df = df.dropna(subset=["span_days"]).copy()
+
 df["event"] = (df["ended"] == 1).astype(int)
 df["t"]     = df["span_days"].astype(float)
 
 # ── label maps ────────────────────────────────────────────────────────────────
 
 incomp_labels = {1: "Territory", 2: "Government", 3: "Both"}
-patype_labels = {1: "Partial",   2: "Comprehensive", 3: "Ceasefire"}
+patype_labels = {1: "Full",   2: "Partial", 3: "Peace Process"}
 region_labels = {1: "Europe",    2: "Middle East",   3: "Asia",
                   4: "Africa",   5: "Americas"}
 
@@ -257,9 +269,9 @@ add_pval(ax, p_reg)
 
 binary_km(
     axes["shaloc"], df, "shaloc",
-    labels={0: "No autonomy provision", 1: "Autonomy provision included"},
+    labels={0: "No local power-sharing provision", 1: "Local power-sharing provision included"},
     colors=[PALETTE[3], PALETTE[0]],
-    title="By Local/Regional Autonomy Provision (shaloc)",
+    title="By Local Power-Sharing Provision (shaloc)",
 )
 
 # ── 6. By PKO presence ────────────────────────────────────────────────────────
@@ -275,9 +287,9 @@ binary_km(
 
 binary_km(
     axes["intgov"], df, "intgov",
-    labels={0: "No interim government provision", 1: "Interim government included"},
+    labels={0: "No integration into government provision", 1: "Integration into government included"},
     colors=[PALETTE[5], PALETTE[4]],
-    title="By Interim Government Provision (intgov)",
+    title="By Integration into Government Provision (intgov)",
 )
 
 # ── save ──────────────────────────────────────────────────────────────────────
