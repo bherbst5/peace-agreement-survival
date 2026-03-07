@@ -131,8 +131,8 @@ LABELS = {
     "intgov":             "Integration into government",
     "intciv":             "Civilian power-sharing",
     "elections":          "Elections provision",
-    "interim":            "Interim arrangements",
-    "natalks":            "National dialogue / talks",
+    "interim":            "Rebels into interim government",
+    "natalks":            "National talks",
     "aut":                "Autonomy provision",
     "fed":                "Federalism provision",
     "ind":                "Independence provision",
@@ -145,13 +145,13 @@ LABELS = {
     "amn":                "Amnesty provision",
     "pris":               "Prisoner release",
     "recon":              "Reconciliation",
-    "return":             "Return / resettlement",
+    "return":             "Return of refugees",
     "reaffirm":           "Reaffirmation of prev. agreement",
     "outlin":             "Outline agreement",
     "pko":                "Peacekeeping operation",
     "gender":             "Gender provision",
-    "co_impl":            "Co-implementation body",
-    "termdur":            "Term duration (termdur)",
+    "co_impl":            "Oversight committee",
+    "termdur":            "Years since last conflict",
     "incomp_gov":         "Incompatibility: Government [ref: Territory]",
     "incomp_both":        "Incompatibility: Both [ref: Territory]",
     "patype_partial":     "Agreement type: Partial [ref: Full]",
@@ -618,7 +618,7 @@ for i, (k, yi) in enumerate(zip(important_idx, y_pos)):
                   edgecolors="white", linewidths=0.7)
     ax_fp.text(hi + 0.02, yi,
                f"{b:+.3f} ({lo:+.3f}-{hi:+.3f})",
-               va="center", fontsize=7.0, color="#333")
+               va="center", fontsize=5.5, color="#333")
 ax_fp.axvline(0.0, color="#888", lw=1.3, ls="--", zorder=1)
 ax_fp.set_yticks(y_pos)
 ax_fp.set_yticklabels([LABELS[COVARIATE_NAMES[k]] for k in important_idx],
@@ -651,7 +651,7 @@ for i, k in enumerate(important_idx):
                 va="center", fontsize=9, color=d_color, fontweight="bold",
                 fontfamily="DejaVu Sans")
 ax_imp.set_yticks(y_b)
-ax_imp.set_yticklabels(short, fontsize=8.2)
+ax_imp.set_yticklabels(short, fontsize=9.7)
 for ytick, k in zip(ax_imp.get_yticklabels(), important_idx):
     ytick.set_color(imp_color[k])
 ax_imp.set_xlabel("Coefficient Magnitude", fontsize=10)

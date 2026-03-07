@@ -261,7 +261,7 @@ for i, (code, label) in enumerate(region_labels.items()):
     step_plot(ax, times, S, lo, hi, PALETTE[i % len(PALETTE)],
               f"{label}  (n={len(sub)}, ev={int(e_g.sum())})")
 p_reg = log_rank_test(groups_reg)
-style_ax(ax, "By Region")
+style_ax(ax, "Kaplan-Meier Survival Curve: Agreement Durability By Region")
 ax.legend(fontsize=8.5, loc="upper right", framealpha=0.85, edgecolor="#ccc")
 add_pval(ax, p_reg)
 
