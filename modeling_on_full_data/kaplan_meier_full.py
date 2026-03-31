@@ -4,7 +4,7 @@ Kaplan-Meier survival analysis on peace agreement duration (span_days).
 Event indicator: ended == 1  (agreement collapsed / terminated)
 Censored:        ended is NaN or 0  (agreement ongoing at censor point)
 
-Seven plots produced in a 4-row layout:
+Nine plots produced in a 5-row layout:
   Row 1: Overall | By incompatibility type
   Row 2: By agreement type | By region
   Row 3: By shaloc (local/regional autonomy provision) | By PKO presence
@@ -209,7 +209,7 @@ axes = fig.subplot_mosaic(
      ["patype",        "region"],
      ["shaloc",        "pko"],
      ["intgov",        "nbr_war"],
-     ["prior_outcome", "prior_outcome"]],
+     ["prior_outcome", "."]],
     gridspec_kw={"hspace": 0.40, "wspace": 0.28},
 )
 
@@ -280,7 +280,7 @@ for i, (code, label) in enumerate(region_labels.items()):
     step_plot(ax, times, S, lo, hi, PALETTE[i % len(PALETTE)],
               f"{label}  (n={len(sub)}, ev={int(e_g.sum())})")
 p_reg = log_rank_test(groups_reg)
-style_ax(ax, "Kaplan-Meier Survival Curve: Agreement Durability By Region")
+style_ax(ax, "By Region")
 ax.legend(fontsize=8.5, loc="upper right", framealpha=0.85, edgecolor="#ccc")
 add_pval(ax, p_reg)
 
@@ -336,7 +336,7 @@ for i, (code, label) in enumerate(prior_out_labels.items()):
     step_plot(ax, times, S, lo, hi, PALETTE[i % len(PALETTE)],
               f"{label}  (n={len(sub)}, ev={int(e_g.sum())})")
 p_po = log_rank_test(groups_po)
-style_ax(ax, "By Prior Conflict Outcome (Quinn et al. 2007)")
+style_ax(ax, "By Prior Conflict Outcome")
 ax.legend(fontsize=9, loc="upper right", framealpha=0.85, edgecolor="#ccc")
 add_pval(ax, p_po)
 
