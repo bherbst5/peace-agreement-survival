@@ -1,0 +1,19 @@
+Variable,N,Mean,SD,Min,Median,Max,Missing
+Mountainous terrain (%),326,23.039,24.984,0.0,9.7,81.0,15
+Mountainous terrain (log),326,2.509,1.275,0.0,2.37,4.407,15
+GDP per capita (USD),327,2411.963,4683.034,194.646,1197.095,35721.611,14
+GDP growth (%),327,-1.07,9.291,-45.325,1.386,27.807,14
+Military personnel (000s),327,105.505,174.013,0.0,55.0,1360.0,14
+Electoral democracy index,340,0.33,0.174,0.073,0.272,0.814,1
+Liberal democracy index,340,0.41,0.233,0.046,0.424,0.937,1
+Participatory democracy index,340,0.403,0.165,0.033,0.381,0.691,1
+Legislative constraints index,320,0.453,0.262,0.032,0.411,0.956,21
+Judicial constraints index,340,0.436,0.265,0.021,0.38,0.909,1
+Freedom of expression index,340,0.524,0.244,0.027,0.554,0.915,1
+Media censorship index,340,-0.132,1.259,-3.017,-0.25,2.454,1
+Regime duration (days),340,4236.376,5682.926,0.0,2049.0,29183.0,1
+No. of neighbors at war,341,1.551,1.598,0.0,1.0,7.0,0
+% neighbors at war,341,0.324,0.272,0.0,0.25,1.0,0
+Battle deaths (best estimate),327,17256.407,36836.039,50.0,8090.0,285384.0,14
+Battle deaths (low estimate),327,16367.165,34476.489,50.0,7742.0,264681.0,14
+Battle deaths (high estimate),327,24775.85,48026.748,64.0,9710.0,355917.0,14
