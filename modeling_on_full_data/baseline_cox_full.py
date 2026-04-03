@@ -603,49 +603,105 @@ print(f"\n  PH violators (p < {PH_ALPHA}):  "
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7.  EXTENDED MODEL  —  x + x*log(t)  for PH violators
 #
-#     For each violating covariate x_j, we add a new column:
-#         x_j_std_i  *  log(t_i)
-#     where t_i is observation i's own event/censoring time.
-#     Using the subject's own time is the standard Grambsch-Therneau
-#     approach; there is no leakage because log(t) is not a future outcome
-#     but a property of the observation's time axis.
+#     Correct approach: person-period (start-stop / counting process) expansion.
+#
+#     For each failure time t_k in the dataset, every observation still at risk
+#     contributes one row.  The time-varying interaction x_j * log(t_k) is
+#     evaluated at the *current failure time* t_k, not the subject's own
+#     eventual exit time.  This avoids leakage: at the moment the likelihood
+#     is evaluated for event t_k we only use information available then.
+#
+#     Dataset structure:
+#         t_start  — previous failure time (0 for the first interval)
+#         t_stop   — current failure time t_k
+#         event    — 1 only for the observation whose event occurs at t_k
+#         x_j * log(t_k) — interaction evaluated at t_k for everyone at risk
 #
 #     The extended model estimates:
 #         beta(t) = beta_1  +  beta_2 * log(t)
-#     where beta_1 is the time-averaged effect and beta_2 captures
-#     how the effect changes over the log-time scale.
+#     where beta_1 is the log-HR when log(t) = 0 (i.e. t = 1 day) and beta_2
+#     captures how the log-HR changes across the log-time scale.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 EXT_NAMES  = []    # names of the added x*log(t) columns
 EXT_LABELS = {}
 
 if violators:
-    log_t = np.log(t_all + 1)     # +1 guards against t=0
-    tv_cols = []
+    # ── All unique failure times in the dataset ───────────────────────────────
+    event_times_unique = np.sort(np.unique(t_all[event_bool]))
+
+    # ── Build the violator-column indices once ────────────────────────────────
+    viol_idx = [ALL_NAMES.index(col) for col in violators]
+
+    # ── Person-period expansion ───────────────────────────────────────────────
+    # For each observation i and each failure time t_k <= t_i, emit one row:
+    #   - original standardised covariates X_std[i]
+    #   - one extra column per violator: X_std[i, j] * log(t_k + 1)
+    #   - (t_start, t_stop, is_event, cluster_id)
+    pp_rows = []
+    for i in range(len(t_all)):
+        ti  = t_all[i]
+        ei  = event_bool[i]
+        cid = cluster_ids[i]
+        xi  = X_std[i]
+
+        # Failure times at which this observation is still in the risk set
+        risk_event_times = event_times_unique[event_times_unique <= ti]
+
+        for k_idx, tk in enumerate(risk_event_times):
+            t_start  = risk_event_times[k_idx - 1] if k_idx > 0 else 0.0
+            t_stop   = tk
+            is_event = bool(ei) and (ti == tk)
+            log_tk   = np.log(tk + 1)          # +1 guards against tk = 0
+
+            # Time-varying interaction terms evaluated at t_k
+            tv_vals = xi[viol_idx] * log_tk    # shape (n_violators,)
+
+            pp_rows.append(
+                np.concatenate([xi, tv_vals,
+                                [t_start, t_stop, float(is_event), float(cid)]])
+            )
+
+    pp_col_names = (ALL_NAMES
+                    + [f"{col}:log(t)" for col in violators]
+                    + ["t_start", "t_stop", "is_event", "conflict_id_pp"])
+    df_pp = pd.DataFrame(pp_rows, columns=pp_col_names)
+
+    print(f"\n  Person-period dataset: {len(df_pp):,} rows  "
+          f"(from {len(t_all)} original observations, "
+          f"{len(event_times_unique)} unique failure times)")
+
+    # ── Interaction (tv) column names and labels ──────────────────────────────
     for col in violators:
-        j      = ALL_NAMES.index(col)
-        tv_col = X_std[:, j] * log_t
-        tv_cols.append(tv_col)
-        tname  = f"{col}:log(t)"
+        tname = f"{col}:log(t)"
         EXT_NAMES.append(tname)
         EXT_LABELS[tname] = f"{LABELS[col].split(' [ref')[0]}  ×  log(t)"
 
-    X_ext     = np.hstack([X_std, np.column_stack(tv_cols)])
-    EXT_ALL   = ALL_NAMES + EXT_NAMES
+    EXT_ALL = ALL_NAMES + EXT_NAMES
 
-    # Standardise only the new tv columns (x_std * log(t) is not unit-free)
-    tv_arr    = np.column_stack(tv_cols)
+    # ── Design matrix and outcome for the extended model ─────────────────────
+    X_ext_pp   = df_pp[EXT_ALL].values.astype(float)
+    t_start_pp = df_pp["t_start"].values.astype(float)
+    t_stop_pp  = df_pp["t_stop"].values.astype(float)
+    event_pp   = df_pp["is_event"].values.astype(bool)
+    cluster_pp = df_pp["conflict_id_pp"].values.astype(int)
+
+    # Standardise only the new tv columns (x_std * log(t_k) is not unit-free);
+    # the base columns are already standardised from the main model.
+    tv_arr    = X_ext_pp[:, len(ALL_NAMES):]
     tv_mean   = tv_arr.mean(axis=0)
-    tv_sd     = tv_arr.std(axis=0); tv_sd[tv_sd == 0] = 1.0
-    X_ext_std = np.hstack([X_std, (tv_arr - tv_mean) / tv_sd])
-    EXT_SD    = np.concatenate([ALL_SD, tv_sd])
+    tv_sd     = tv_arr.std(axis=0);  tv_sd[tv_sd == 0] = 1.0
+    X_ext_pp_std = np.hstack([X_ext_pp[:, :len(ALL_NAMES)],
+                               (tv_arr - tv_mean) / tv_sd])
+    EXT_SD = np.concatenate([ALL_SD, tv_sd])
 
-    y_ext = Surv.from_arrays(event=event_bool, time=t_all)
+    y_ext = Surv.from_arrays(event=event_pp, time=t_stop_pp)
 
     print(f"\nFitting extended model  "
           f"({len(violators)} time-varying term(s): "
           f"{', '.join(violators)})  ...", end="", flush=True)
-    ext_std = fit_clustered(X_ext_std, y_ext, t_all, event_float, cluster_ids)
+    ext_std = fit_clustered(X_ext_pp_std, y_ext, t_stop_pp,
+                            event_pp.astype(float), cluster_pp)
     ext     = back_transform(ext_std, EXT_SD)
     print(" done")
 
@@ -672,7 +728,7 @@ else:
 print("\n  *** p<0.001  ** p<0.01  * p<0.05\n")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 8.  FIGURES
+# 8.  FIGURE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 plt.rcParams.update({
@@ -692,66 +748,66 @@ plt.rcParams.update({
     "text.color":        "#2b2b2b",
 })
 
-# ── Thematic Groupings ────────────────────────────────────────────────────────
+PALETTE = ["#E63946", "#2A9D8F", "#E9C46A", "#457B9D", "#F4A261", "#6A4C93"]
 
-THEMATIC_GROUPS = {
-    "External & Prior Conflict Context": [
-        "neighbor_at_war", "rebel_victory", "government_victory", 
-        "unknown_outcome", "log_bd_total", "regime_change", 
-        "v2x_polyarchy", "log_v2regdur", "v2x_freexp_altinf", 
-        "v2x_liberal", "v2x_partip", "log_gdp_pc", "gdp_growth", 
-        "lmtnest", "log_milper"
-    ],
-    "Agreement Structure & Conflict Typology": [
-        "region_europe", "region_middleeast", "region_asia", "region_americas",
-        "incomp_gov", "incomp_both", "patype_partial", "patype_process",
-        "frame_frame2", "frame_frame3", "termdur"
-    ],
-    "Security & Enforcement": [
-        "cease", "withd", "ddr", "intarmy", "pko"
-    ],
-    "Political Power-Sharing & Governance": [
-        "pp", "intgov", "intciv", "interim", "elections", 
-        "natalks", "co_impl", "reaffirm", "outlin"
-    ],
-    "Territorial & Decentralization": [
-        "aut", "fed", "ind", "shaloc", "locgov", "demarcation", "ref", "regdev"
-    ],
-    "Transitional Justice, Social & Humanitarian": [
-        "amn", "pris", "recon", "return", "cul", "gender"
-    ],
-    "Interaction Terms": INTERACTION_NAMES
-}
+n_panels = 5 if ext is not None else 4
+# Forest plots A and B scale with the number of predictors; give them more
+# vertical room than the diagnostic panels
+fig_h = max(28, 6 + len(ALL_NAMES) * 0.42)
+fig = plt.figure(figsize=(20, fig_h), facecolor="#FAFAF7")
+fig.suptitle(
+    "Cox Proportional Hazards Model — Peace Agreement Duration",
+    fontsize=17, fontweight="bold", y=0.995, color="#1a1a1a",
+)
+fig.text(
+    0.5, 0.980,
+    f"Predictors standardized (mean 0, sd 1)  |  "
+    f"Interactions residualized against main effects  |  "
+    f"Cluster-robust SEs (Lin-Wei) by conflict_id  |  "
+    f"N clusters = {multi['n_clusters']}",
+    ha="center", fontsize=8.5, color="#555", style="italic",
+)
 
-# ── Base Forest Plot Function ─────────────────────────────────────────────────
+if ext is not None:
+    gs = fig.add_gridspec(3, 2, height_ratios=[3.5, 2.0, 2.0],
+                          hspace=0.44, wspace=0.38, top=0.96)
+    ax_uni   = fig.add_subplot(gs[0, 0])
+    ax_multi = fig.add_subplot(gs[0, 1])
+    ax_bh    = fig.add_subplot(gs[1, 0])
+    ax_sch   = fig.add_subplot(gs[1, 1])
+    ax_ext   = fig.add_subplot(gs[2, :])
+else:
+    gs = fig.add_gridspec(2, 2, height_ratios=[3.5, 2.0],
+                          hspace=0.44, wspace=0.38, top=0.96)
+    ax_uni   = fig.add_subplot(gs[0, 0])
+    ax_multi = fig.add_subplot(gs[0, 1])
+    ax_bh    = fig.add_subplot(gs[1, 0])
+    ax_sch   = fig.add_subplot(gs[1, 1])
+    ax_ext   = None
+
 
 def forest_plot(ax, names, hr_arr, lo_arr, hi_arr, p_arr,
                 title, color="#457B9D", label_dict=None):
     if label_dict is None:
-        label_dict = FULL_LABELS if 'FULL_LABELS' in globals() else LABELS
+        label_dict = LABELS
     nn = len(names)
     y  = np.arange(nn)[::-1]
-    
     for i, (yi, col) in enumerate(zip(y, names)):
         hr, lo, hi, pv = hr_arr[i], lo_arr[i], hi_arr[i], p_arr[i]
         c  = "#E63946" if pv < 0.05 else color
         mk = "D" if pv < 0.05 else "o"
         ax.plot([lo, hi], [yi, yi], color=c, lw=2.0, solid_capstyle="round")
         ax.scatter(hr, yi, color=c, s=50, zorder=5, marker=mk)
-        
     ax.axvline(1.0, color="#888", lw=1.2, ls="--", zorder=0)
     ax.set_yticks(y)
     ax.set_yticklabels(
-        [label_dict.get(c, c).split(" [ref")[0] for c in names], fontsize=8.5
+        [label_dict.get(c, c).split(" [ref")[0] for c in names], fontsize=7.0
     )
-    ax.set_xlabel("Hazard Ratio (95% CI)", fontsize=9)
-    ax.set_title(title, fontsize=11, fontweight="bold", pad=8)
+    ax.set_xlabel("Hazard Ratio (95% CI)", fontsize=10)
+    ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
     ax.set_xscale("log")
     ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
-    
-    # Standardize x-limits for comparability across plots
-    ax.set_xlim(0.05, 20)
-    
+    ax.set_xlim(0.02, 80)
     ax_r = ax.twinx()
     ax_r.set_ylim(ax.get_ylim()); ax_r.set_yticks(y)
     ax_r.set_yticklabels(
@@ -762,104 +818,151 @@ def forest_plot(ax, names, hr_arr, lo_arr, hi_arr, p_arr,
     ax_r.tick_params(axis="y", length=0); ax_r.grid(False)
 
 
-def plot_grouped_forest(ax, names, results_dict, title, color="#457B9D"):
-    """Sorts variables by HR and plots them."""
-    # Filter to only variables that exist in the results
-    valid_names = [n for n in names if n in results_dict]
-    # Sort from lowest HR to highest HR
-    sorted_names = sorted(valid_names, key=lambda x: results_dict[x]["hr"][0])
-    
-    hr_arr = [results_dict[c]["hr"][0] for c in sorted_names]
-    lo_arr = [results_dict[c]["hr_lo"][0] for c in sorted_names]
-    hi_arr = [results_dict[c]["hr_hi"][0] for c in sorted_names]
-    p_arr  = [results_dict[c]["p"][0] for c in sorted_names]
-    
-    forest_plot(ax, sorted_names, hr_arr, lo_arr, hi_arr, p_arr, title, color=color)
+# ── A. Univariate ─────────────────────────────────────────────────────────────
+forest_plot(ax_uni, ALL_NAMES,
+            [uni_results[c]["hr"][0]    for c in ALL_NAMES],
+            [uni_results[c]["hr_lo"][0] for c in ALL_NAMES],
+            [uni_results[c]["hr_hi"][0] for c in ALL_NAMES],
+            [uni_results[c]["p"][0]     for c in ALL_NAMES],
+            "A.  Univariate Cox Models\n(model-based 95% CIs)",
+            color="#457B9D")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# FIGURE 1: UNIVARIATE MODELS (THEMATICALLY GROUPED & SORTED)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-fig1 = plt.figure(figsize=(20, 24), facecolor="#FAFAF7")
-fig1.suptitle(
-    "Univariate Cox Models by Thematic Category\n(Sorted by Hazard Ratio)",
-    fontsize=16, fontweight="bold", y=0.98, color="#1a1a1a"
-)
-
-axes_uni = fig1.subplot_mosaic(
-    [["context", "struct"],
-     ["security", "political"],
-     ["territory", "justice"],
-     ["interactions", "."]],
-    gridspec_kw={"hspace": 0.40, "wspace": 0.35, "height_ratios": [1.5, 1, 1, 1.3]}
-)
-
-plot_grouped_forest(axes_uni["context"], THEMATIC_GROUPS["External & Prior Conflict Context"], uni_results, "External & Prior Conflict Context", "#457B9D")
-plot_grouped_forest(axes_uni["struct"], THEMATIC_GROUPS["Agreement Structure & Conflict Typology"], uni_results, "Agreement Structure & Conflict Typology", "#2A9D8F")
-plot_grouped_forest(axes_uni["security"], THEMATIC_GROUPS["Security & Enforcement"], uni_results, "Security & Enforcement", "#E9C46A")
-plot_grouped_forest(axes_uni["political"], THEMATIC_GROUPS["Political Power-Sharing & Governance"], uni_results, "Political Power-Sharing & Governance", "#F4A261")
-plot_grouped_forest(axes_uni["territory"], THEMATIC_GROUPS["Territorial & Decentralization"], uni_results, "Territorial & Decentralization", "#6A4C93")
-plot_grouped_forest(axes_uni["justice"], THEMATIC_GROUPS["Transitional Justice, Social & Humanitarian"], uni_results, "Transitional Justice & Social Factors", "#E63946")
-plot_grouped_forest(axes_uni["interactions"], THEMATIC_GROUPS["Interaction Terms"], uni_results, "Interaction Terms", "#457B9D")
-
-out_uni = "univariate_forest_plots.png"
-fig1.savefig(out_uni, dpi=180, bbox_inches="tight", facecolor="#FAFAF7")
-print(f"Saved Univariate grouped plots to {out_uni}")
-plt.close(fig1)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FIGURE 2: MULTIVARIABLE MODEL & DIAGNOSTICS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-n_panels_m = 3 if ext is not None else 2
-fig2_h = max(16, 4 + len(ALL_NAMES) * 0.35)
-fig2 = plt.figure(figsize=(12, fig2_h), facecolor="#FAFAF7")
-fig2.suptitle(
-    "Multivariable Cox Model & Diagnostics",
-    fontsize=16, fontweight="bold", y=0.99, color="#1a1a1a"
-)
-
+# ── B. Non-PH covariates from the extended model ──────────────────────────────
+# Panel B shows only the covariates that satisfy the PH assumption.  Because PH
+# violations bias all coefficients, we pull these estimates from the *extended*
+# model (ext) rather than the main model (multi).  Each non-PH covariate has a
+# single, time-constant hazard ratio that can be read directly off the forest
+# plot.  PH-violating covariates are shown in Panel E with their interaction
+# term, because their effect depends on time.
 if ext is not None:
-    gs = fig2.add_gridspec(3, 1, height_ratios=[4.0, 1.5, 2.0], hspace=0.35)
-    ax_multi = fig2.add_subplot(gs[0])
-    ax_diag  = fig2.add_subplot(gs[1])
-    ax_ext   = fig2.add_subplot(gs[2])
+    non_violators  = [c for c in ALL_NAMES if c not in violators]
+    non_viol_idx   = [list(EXT_ALL).index(c) for c in non_violators]
+    forest_plot(
+        ax_multi, non_violators,
+        ext["hr"][non_viol_idx], ext["hr_lo"][non_viol_idx],
+        ext["hr_hi"][non_viol_idx], ext["p"][non_viol_idx],
+        "B.  Non-PH Covariates — Extended Model\n(cluster-robust 95% CIs)",
+        color="#2A9D8F",
+    )
 else:
-    gs = fig2.add_gridspec(2, 1, height_ratios=[4.0, 1.5], hspace=0.35)
-    ax_multi = fig2.add_subplot(gs[0])
-    ax_diag  = fig2.add_subplot(gs[1])
-    ax_ext   = None
+    # No violations: main model coefficients are unbiased, show all covariates.
+    forest_plot(ax_multi, ALL_NAMES,
+                multi["hr"], multi["hr_lo"], multi["hr_hi"], multi["p"],
+                "B.  Multivariable Cox Model\n(cluster-robust 95% CIs)",
+                color="#2A9D8F")
 
-# ── Multivariable Forest Plot ──
-# (Sorting multivariable by HR is optional, but retaining original grouped order is often preferred here. 
-# We will plot using ALL_NAMES to show everything).
-hr_multi = [multi["hr"][k] for k in range(len(ALL_NAMES))]
-lo_multi = [multi["hr_lo"][k] for k in range(len(ALL_NAMES))]
-hi_multi = [multi["hr_hi"][k] for k in range(len(ALL_NAMES))]
-p_multi  = [multi["p"][k] for k in range(len(ALL_NAMES))]
+# ── C. Baseline cumulative hazard ─────────────────────────────────────────────
+b_times, H0 = breslow_baseline(multi_std["model"], X_std)
+ax_bh.step(b_times / 365.25, H0, where="post", color=PALETTE[0], lw=2.2)
+ax_bh.fill_between(b_times / 365.25, 0, H0, step="post",
+                   alpha=0.12, color=PALETTE[0])
+ax_bh.set_title("C.  Breslow Baseline Cumulative Hazard  H₀(t)",
+                fontsize=12, fontweight="bold", pad=10)
+ax_bh.set_xlabel("Time (years)", fontsize=10)
+ax_bh.set_ylabel("H₀(t)", fontsize=10)
+ax_bh.set_xlim(left=0); ax_bh.set_ylim(bottom=0)
 
-forest_plot(ax_multi, ALL_NAMES, hr_multi, lo_multi, hi_multi, p_multi,
-            "Multivariable Model (Cluster-Robust CIs)", color="#2A9D8F")
+# ── D. Schoenfeld residuals — PH-violating variables only ────────────────────
+# Show the variables that *failed* the PH test: these are the ones the plot is
+# meant to diagnose.  Cap at 12 for readability.
+show_cols  = violators[:12] if len(violators) > 12 else violators
+colors_sch = [PALETTE[i % len(PALETTE)] for i in range(len(show_cols))]
+ax_sch.set_title(
+    "D.  Schoenfeld Residuals  (PH Assumption Check)\n"
+    f"Showing {len(show_cols)} PH-violating variables  (p < {PH_ALPHA})",
+    fontsize=12, fontweight="bold", pad=10,
+)
+for col, c in zip(show_cols, colors_sch):
+    if col not in ALL_NAMES:
+        continue
+    k       = ALL_NAMES.index(col)
+    r       = resids[:, k]
+    rho, pv = ph_tests[col]
+    ord_t   = np.argsort(e_times)
+    ts      = e_times[ord_t] / 365.25
+    rs      = r[ord_t]
+    w       = max(1, len(rs) // 10)
+    smooth  = np.convolve(rs, np.ones(w) / w, mode="valid")
+    tsm     = ts[w//2: w//2 + len(smooth)]
+    ax_sch.scatter(ts, rs, alpha=0.25, s=12, color=c)
+    lbl = (f"{LABELS[col].split(' [ref')[0].split('  ×')[0]}"
+           f"  ρ={rho:.2f}, p={pv:.3f} !")
+    ax_sch.plot(tsm, smooth, color=c, lw=2.0, label=lbl)
+ax_sch.axhline(0, color="#888", lw=1, ls="--")
+ax_sch.set_xlabel("Time (years)", fontsize=10)
+ax_sch.set_ylabel("Schoenfeld residual", fontsize=10)
+ax_sch.legend(fontsize=7.5, loc="upper right", framealpha=0.85, edgecolor="#ccc")
 
-# ── Baseline Cumulative Hazard ──
-times_bh, chf_bh = breslow_baseline(multi_std["model"], X_std)
-ax_diag.step(times_bh / 365.25, chf_bh, where="post", color="#E63946", lw=2)
-ax_diag.set_title("Breslow Baseline Cumulative Hazard", fontsize=11, fontweight="bold")
-ax_diag.set_xlabel("Time (years)", fontsize=9)
-ax_diag.set_ylabel("Cumulative Hazard", fontsize=9)
+# ── E. PH-violating covariates: base coefficient + time interaction ───────────
+# Each PH-violating variable requires *two* rows — the base term (β₁) and the
+# interaction term (β₂) — because the full effect is β₁ + β₂·log(t).
+# Reading β₁ alone is misleading: it is only the log-HR when log(t) = 0,
+# i.e. t = 1 day (given the +1 offset).  Both rows are shown together so the
+# reader can evaluate the direction and magnitude of time-dependence.
+if ax_ext is not None and ext is not None:
+    # Build ordered list: base term then interaction term for each violator
+    ext_display_names = []
+    for v in violators:
+        ext_display_names.append(v)              # β₁: base coefficient
+        ext_display_names.append(f"{v}:log(t)")  # β₂: time-interaction
 
-# ── Extended Model (if applicable) ──
-if ax_ext is not None:
-    hr_ext = [ext["hr"][k] for k in range(len(EXT_ALL))]
-    lo_ext = [ext["hr_lo"][k] for k in range(len(EXT_ALL))]
-    hi_ext = [ext["hr_hi"][k] for k in range(len(EXT_ALL))]
-    p_ext  = [ext["p"][k] for k in range(len(EXT_ALL))]
+    ext_display_idx = [list(EXT_ALL).index(c) for c in ext_display_names]
 
-    forest_plot(ax_ext, EXT_ALL, hr_ext, lo_ext, hi_ext, p_ext,
-                "Extended Model (Time-Varying Terms)", color="#F4A261")
+    nn_ext = len(ext_display_names)
+    y_pos  = np.arange(nn_ext)[::-1]
 
-out_multi = "multivariable_diagnostics.png"
-fig2.savefig(out_multi, dpi=180, bbox_inches="tight", facecolor="#FAFAF7")
-print(f"Saved Multivariable & Diagnostics to {out_multi}")
-plt.close(fig2)
+    # Draw a faint horizontal band behind each pair for visual grouping
+    for pair_i in range(len(violators)):
+        # two rows per pair; top row index in y_pos is pair_i*2, bottom is pair_i*2+1
+        y_top    = y_pos[pair_i * 2]
+        y_bot    = y_pos[pair_i * 2 + 1]
+        band_col = "#e8e8e0" if pair_i % 2 == 0 else "#FAFAF7"
+        ax_ext.axhspan(y_bot - 0.45, y_top + 0.45,
+                       color=band_col, zorder=0, lw=0)
+
+    hr_d  = ext["hr"][ext_display_idx]
+    lo_d  = ext["hr_lo"][ext_display_idx]
+    hi_d  = ext["hr_hi"][ext_display_idx]
+    p_d   = ext["p"][ext_display_idx]
+
+    for i, (yi, col) in enumerate(zip(y_pos, ext_display_names)):
+        hr, lo, hi, pv = hr_d[i], lo_d[i], hi_d[i], p_d[i]
+        is_tv  = col in EXT_NAMES          # True for interaction rows
+        color  = "#6A4C93" if is_tv else "#F4A261"
+        mk     = "s" if is_tv else "D" if pv < 0.05 else "o"
+        ax_ext.plot([lo, hi], [yi, yi], color=color, lw=2.0, solid_capstyle="round")
+        ax_ext.scatter(hr, yi, color=color, s=50, zorder=5, marker=mk)
+
+    ax_ext.axvline(1.0, color="#888", lw=1.2, ls="--", zorder=0)
+    ax_ext.set_yticks(y_pos)
+    ax_ext.set_yticklabels(
+        [FULL_LABELS.get(c, c).split(" [ref")[0] for c in ext_display_names],
+        fontsize=7.0,
+    )
+    ax_ext.set_xlabel("Hazard Ratio (95% CI)", fontsize=10)
+    ax_ext.set_xscale("log")
+    ax_ext.xaxis.set_major_formatter(mticker.ScalarFormatter())
+    ax_ext.set_xlim(0.02, 80)
+    ax_ext.set_title(
+        f"E.  PH-Violating Covariates — Base Coefficient (●/◆) + Time Interaction (■)  [β₁ + β₂·log(t)]\n"
+        f"Orange = base term β₁  (log-HR at t = 1 day);  Purple = interaction β₂  (log-HR change per unit log(t))  |  "
+        f"Pairs shaded together",
+        fontsize=11, fontweight="bold", pad=10,
+    )
+    ax_ext_r = ax_ext.twinx()
+    ax_ext_r.set_ylim(ax_ext.get_ylim())
+    ax_ext_r.set_yticks(y_pos)
+    ax_ext_r.set_yticklabels(
+        ["***" if pv < 0.001 else "**" if pv < 0.01 else "*" if pv < 0.05 else ""
+         for pv in p_d], fontsize=9, color="#E63946",
+    )
+    for sp in ["top", "right", "left"]:
+        ax_ext_r.spines[sp].set_visible(False)
+    ax_ext_r.tick_params(axis="y", length=0)
+    ax_ext_r.grid(False)
+elif ax_ext is not None:
+    ax_ext.axis("off")
+
+plt.savefig("baseline_results_full.png", dpi=180, bbox_inches="tight", facecolor="#FAFAF7")
+print("Figure saved → baseline_results_full.png")
+plt.close()
