@@ -296,9 +296,20 @@ e_all = df["event"].values          # bool array for sksurv
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── PH VIOLATORS FROM baseline_cox_full.py ────────────
-# empty because final survival time t can't be used as a covariate 
-# with the scikit-survival package, as that causes leakage
-VIOLATORS = []
+VIOLATORS = [
+    # "elections", 
+    # "regdev", 
+    # "locgov", 
+    # "government_victory", 
+    # "log_gdp_pc", 
+    # "v2x_polyarchy", 
+    # "v2x_liberal", 
+    # "region_middleeast", 
+    # "incomp_gov", 
+    # "ddr::intarmy", 
+    # "pp::elections", 
+    # "reaffirm::co_impl"
+]
 # ─────────────────────────────────────────────────────────────────────────────
 
 TV_NAMES = [f"{v}:log(t)" for v in VIOLATORS]
@@ -751,10 +762,9 @@ ax2.set_xlabel("# non-zero coefficients", fontsize=8.5)
 ax2.spines["top"].set_visible(True)
 ax2.spines["right"].set_visible(False)
 
-ax_path.invert_xaxis()
-ax_path.set_xlabel("log(lambda)  <-  increasing regularization", fontsize=10)
+ax_path.set_xlabel("log(lambda)  →  increasing regularization", fontsize=10, fontfamily="DejaVu Sans")
 ax_path.set_ylabel("Coefficient (original scale)", fontsize=10)
-ax_path.set_title("A.  Lasso Coefficient Path\n"
+ax_path.set_title("Lasso Coefficient Path\n"
                   "(colored = selected at lambda_min;  grey = zeroed out;"
                   "  dashed = time-varying term)",
                   fontsize=11.5, fontweight="bold", pad=10)
@@ -807,9 +817,9 @@ ax_cv.text((log_lam_cv[0] + np.log(lam_best)) / 2,
            f"{n_nonzero_min} vars\nselected",
            ha="center", fontsize=8, color="#E63946", style="italic")
 
-ax_cv.set_xlabel("log(lambda)  →  increasing regularization", fontsize=10)
-ax_cv.set_ylabel("Mean held-out partial log-lik", fontsize=10)
-ax_cv.set_title(f"B.  {K}-Fold Cross-Validation Curve",
+ax_cv.set_xlabel("log(lambda)  →  increasing regularization", fontsize=10, fontfamily="DejaVu Sans")
+ax_cv.set_ylabel("Mean held-out partial log-likelihood", fontsize=10)
+ax_cv.set_title(f"{K}-Fold Cross-Validation Curve",
                 fontsize=11.5, fontweight="bold", pad=10)
 ax_cv.legend(fontsize=9, framealpha=0.88, edgecolor="#ccc")
 
@@ -842,7 +852,7 @@ for ytick, k in zip(ax_fp.get_yticklabels(), important_idx):
     ytick.set_color(imp_color[k])
 ax_fp.set_xlabel("Coefficient beta  (95% bootstrap CI)", fontsize=10)
 ax_fp.set_title(
-    f"C.  Forest Plot — {n_nonzero_min} Selected Predictors at lambda_min\n"
+    f"Forest Plot of {n_nonzero_min} Selected Predictors at lambda_min\n"
     f"(◆ = CI excludes 0; sorted by value)",
     fontsize=11.5, fontweight="bold", pad=10, fontfamily="DejaVu Sans"
 )
@@ -872,7 +882,7 @@ for ytick, k in zip(ax_imp.get_yticklabels(), important_idx):
     ytick.set_color(imp_color[k])
 ax_imp.set_xlabel("Coefficient Magnitude", fontsize=10)
 ax_imp.set_title(
-    "D.  Variable Importance\n"
+    "Variable Importance\n"
     "(▲ = increases hazard  /  ▼ = reduces hazard)",
     fontsize=11.5, fontweight="bold", pad=10, fontfamily="DejaVu Sans"
 )

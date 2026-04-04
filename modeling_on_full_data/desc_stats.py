@@ -18,6 +18,8 @@ df.columns = df.columns.str.strip()
 # ── Column groups ──────────────────────────────────────────────────────────────
 
 continuous_vars = {
+    "span_days": "Agreement duration (days)",
+    "span_years": "Agreement duration (years)",
     "mtnest":               "Mountainous terrain (%)",
     "lmtnest":              "Mountainous terrain (log)",
     "gdp_per_capita":       "GDP per capita (USD)",
@@ -218,7 +220,7 @@ bin_table_b = bin_table.iloc[mid:].reset_index(drop=True)
 
 # ── Export ─────────────────────────────────────────────────────────────────────
 
-CONT_NOTE = "Note: Statistics computed on non-missing observations. 'Missing' reports the raw count of missing values before listwise deletion."
+CONT_NOTE = "Note: Statistics computed on non-missing observations."
 BIN_NOTE  = "Note: Proportion = share of non-missing observations coded 1."
 
 render_table(cont_table,  filename="desc_stats_continuous.png",  note=CONT_NOTE)
