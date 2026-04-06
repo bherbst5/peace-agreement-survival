@@ -866,7 +866,7 @@ uni_p   = np.array([uni_results[c]["p"][0]     for c in ALL_NAMES])
 s_names, s_hr, s_lo, s_hi, s_p = sort_by_hr(ALL_NAMES, uni_hr, uni_lo, uni_hi, uni_p)
 
 forest_plot(ax_uni, s_names, s_hr, s_lo, s_hi, s_p,
-            "Univariate Cox Models\n(model-based 95% CIs, sorted by Hazard Ratio)",
+            "Univariate Cox Models",
             color="#166F75")
 
 # ── B. Non-PH covariates from the extended model ──────────────────────────────
@@ -888,7 +888,7 @@ if ext is not None:
     )
     forest_plot(
         ax_multi, b_names, b_hr, b_lo, b_hi, b_p,
-        "Non-PH Covariates — Extended Model\n(cluster-robust 95% CIs, sorted by Hazard Ratio)",
+        "Non-PH Covariates — Extended Model",
         color="#117AD6",
     )
 else:
@@ -898,7 +898,7 @@ else:
     m_p  = multi["p"]
     b_names, b_hr, b_lo, b_hi, b_p = sort_by_hr(ALL_NAMES, m_hr, m_lo, m_hi, m_p)
     forest_plot(ax_multi, b_names, b_hr, b_lo, b_hi, b_p,
-                "Multivariable Cox Model\n(cluster-robust 95% CIs, sorted by Hazard Ratio)",
+                "Multivariable Cox Model",
                 color="#117AD6")
 
 # ── C. Baseline cumulative hazard ─────────────────────────────────────────────
