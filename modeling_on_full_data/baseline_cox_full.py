@@ -775,7 +775,7 @@ if ext is not None:
     ax_multi = fig.add_subplot(gs[0, 1])
     ax_bh    = fig.add_subplot(gs[1, 0])
     ax_sch   = fig.add_subplot(gs[1, 1])
-    ax_ext   = fig.add_subplot(gs[2, :])
+    ax_ext   = fig.add_subplot(gs[2, 0])
 else:
     gs = fig.add_gridspec(2, 2, height_ratios=[3.5, 2.0],
                           hspace=0.44, wspace=0.38, top=0.96)
@@ -785,19 +785,58 @@ else:
     ax_sch   = fig.add_subplot(gs[1, 1])
     ax_ext   = None
 
+def sort_by_hr(names, hr_arr, lo_arr, hi_arr, p_arr):
+    """Return all arrays sorted ascending by HR (most protective first)."""
+    order = np.argsort(hr_arr)
+    return (
+        [names[i] for i in order],
+        hr_arr[order], lo_arr[order], hi_arr[order], p_arr[order],
+    )
 
 def forest_plot(ax, names, hr_arr, lo_arr, hi_arr, p_arr,
-                title, color="#457B9D", label_dict=None):
+                title, color="#457B9D", label_dict=None,
+                xlim=(0.05, 20)):
     if label_dict is None:
         label_dict = LABELS
     nn = len(names)
-    y  = np.arange(nn)[::-1]
+    y  = np.arange(nn)
     for i, (yi, col) in enumerate(zip(y, names)):
         hr, lo, hi, pv = hr_arr[i], lo_arr[i], hi_arr[i], p_arr[i]
-        c  = "#E63946" if pv < 0.05 else color
+        c  = "#AE9142" if pv < 0.05 else color
         mk = "D" if pv < 0.05 else "o"
-        ax.plot([lo, hi], [yi, yi], color=c, lw=2.0, solid_capstyle="round")
-        ax.scatter(hr, yi, color=c, s=50, zorder=5, marker=mk)
+
+        # Clip CI to xlim and draw indicators for out-of-range bounds
+        lo_plot = max(lo, xlim[0])
+        hi_plot = min(hi, xlim[1])
+        ax.plot([lo_plot, hi_plot], [yi, yi], color=c, lw=2.0,
+                solid_capstyle="round")
+
+        # Left clip indicator (Text removed)
+        if lo < xlim[0]:
+            ax.scatter(xlim[0], yi, color=c, s=60, marker="<",
+                       zorder=6, clip_on=False)
+
+        # Right clip indicator (Text removed)
+        if hi > xlim[1]:
+            ax.scatter(xlim[1], yi, color=c, s=60, marker=">",
+                       zorder=6, clip_on=False)
+
+        # Only draw centre point if it's in range
+        if xlim[0] <= hr <= xlim[1]:
+            ax.scatter(hr, yi, color=c, s=50, zorder=5, marker=mk)
+        else:
+            # Centre point off-graph — print HR value at the boundary
+            side  = xlim[0] if hr < xlim[0] else xlim[1]
+            arrow = "<" if hr < xlim[0] else ">"
+            ax.scatter(side, yi, color=c, s=60, marker=arrow,
+                       zorder=6, clip_on=False)
+            
+            # Shifted HR label: changed yi to yi - 0.25 and va to "top"
+            ax.text(side * (1.08 if hr < xlim[0] else 1/1.08), yi - 0.25,
+                    f"HR={hr:.2f}", va="top",
+                    ha="left" if hr < xlim[0] else "right",
+                    fontsize=5.5, color=c, fontweight="bold")
+
     ax.axvline(1.0, color="#888", lw=1.2, ls="--", zorder=0)
     ax.set_yticks(y)
     ax.set_yticklabels(
@@ -807,25 +846,28 @@ def forest_plot(ax, names, hr_arr, lo_arr, hi_arr, p_arr,
     ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
     ax.set_xscale("log")
     ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
-    ax.set_xlim(0.02, 80)
+    ax.set_xlim(xlim)
     ax_r = ax.twinx()
     ax_r.set_ylim(ax.get_ylim()); ax_r.set_yticks(y)
     ax_r.set_yticklabels(
         ["***" if pv < 0.001 else "**" if pv < 0.01 else "*" if pv < 0.05 else ""
-         for pv in p_arr], fontsize=9, color="#E63946")
+         for pv in p_arr], fontsize=9, color="#AE9142")
     for sp in ["top", "right", "left"]:
         ax_r.spines[sp].set_visible(False)
     ax_r.tick_params(axis="y", length=0); ax_r.grid(False)
 
 
 # ── A. Univariate ─────────────────────────────────────────────────────────────
-forest_plot(ax_uni, ALL_NAMES,
-            [uni_results[c]["hr"][0]    for c in ALL_NAMES],
-            [uni_results[c]["hr_lo"][0] for c in ALL_NAMES],
-            [uni_results[c]["hr_hi"][0] for c in ALL_NAMES],
-            [uni_results[c]["p"][0]     for c in ALL_NAMES],
-            "A.  Univariate Cox Models\n(model-based 95% CIs)",
-            color="#457B9D")
+uni_hr  = np.array([uni_results[c]["hr"][0]    for c in ALL_NAMES])
+uni_lo  = np.array([uni_results[c]["hr_lo"][0] for c in ALL_NAMES])
+uni_hi  = np.array([uni_results[c]["hr_hi"][0] for c in ALL_NAMES])
+uni_p   = np.array([uni_results[c]["p"][0]     for c in ALL_NAMES])
+
+s_names, s_hr, s_lo, s_hi, s_p = sort_by_hr(ALL_NAMES, uni_hr, uni_lo, uni_hi, uni_p)
+
+forest_plot(ax_uni, s_names, s_hr, s_lo, s_hi, s_p,
+            "Univariate Cox Models\n(model-based 95% CIs, sorted by Hazard Ratio)",
+            color="#166F75")
 
 # ── B. Non-PH covariates from the extended model ──────────────────────────────
 # Panel B shows only the covariates that satisfy the PH assumption.  Because PH
@@ -835,28 +877,36 @@ forest_plot(ax_uni, ALL_NAMES,
 # plot.  PH-violating covariates are shown in Panel E with their interaction
 # term, because their effect depends on time.
 if ext is not None:
-    non_violators  = [c for c in ALL_NAMES if c not in violators]
-    non_viol_idx   = [list(EXT_ALL).index(c) for c in non_violators]
+    non_violators = [c for c in ALL_NAMES if c not in violators]
+    nv_idx        = [list(EXT_ALL).index(c) for c in non_violators]
+    nv_hr  = ext["hr"][nv_idx]
+    nv_lo  = ext["hr_lo"][nv_idx]
+    nv_hi  = ext["hr_hi"][nv_idx]
+    nv_p   = ext["p"][nv_idx]
+    b_names, b_hr, b_lo, b_hi, b_p = sort_by_hr(
+        non_violators, nv_hr, nv_lo, nv_hi, nv_p
+    )
     forest_plot(
-        ax_multi, non_violators,
-        ext["hr"][non_viol_idx], ext["hr_lo"][non_viol_idx],
-        ext["hr_hi"][non_viol_idx], ext["p"][non_viol_idx],
-        "B.  Non-PH Covariates — Extended Model\n(cluster-robust 95% CIs)",
-        color="#2A9D8F",
+        ax_multi, b_names, b_hr, b_lo, b_hi, b_p,
+        "Non-PH Covariates — Extended Model\n(cluster-robust 95% CIs, sorted by Hazard Ratio)",
+        color="#117AD6",
     )
 else:
-    # No violations: main model coefficients are unbiased, show all covariates.
-    forest_plot(ax_multi, ALL_NAMES,
-                multi["hr"], multi["hr_lo"], multi["hr_hi"], multi["p"],
-                "B.  Multivariable Cox Model\n(cluster-robust 95% CIs)",
-                color="#2A9D8F")
+    m_hr = multi["hr"]
+    m_lo = multi["hr_lo"]
+    m_hi = multi["hr_hi"]
+    m_p  = multi["p"]
+    b_names, b_hr, b_lo, b_hi, b_p = sort_by_hr(ALL_NAMES, m_hr, m_lo, m_hi, m_p)
+    forest_plot(ax_multi, b_names, b_hr, b_lo, b_hi, b_p,
+                "Multivariable Cox Model\n(cluster-robust 95% CIs, sorted by Hazard Ratio)",
+                color="#117AD6")
 
 # ── C. Baseline cumulative hazard ─────────────────────────────────────────────
 b_times, H0 = breslow_baseline(multi_std["model"], X_std)
 ax_bh.step(b_times / 365.25, H0, where="post", color=PALETTE[0], lw=2.2)
 ax_bh.fill_between(b_times / 365.25, 0, H0, step="post",
                    alpha=0.12, color=PALETTE[0])
-ax_bh.set_title("C.  Breslow Baseline Cumulative Hazard  H₀(t)",
+ax_bh.set_title("Breslow Baseline Cumulative Hazard  H₀(t)",
                 fontsize=12, fontweight="bold", pad=10)
 ax_bh.set_xlabel("Time (years)", fontsize=10)
 ax_bh.set_ylabel("H₀(t)", fontsize=10)
@@ -865,13 +915,25 @@ ax_bh.set_xlim(left=0); ax_bh.set_ylim(bottom=0)
 # ── D. Schoenfeld residuals — PH-violating variables only ────────────────────
 # Show the variables that *failed* the PH test: these are the ones the plot is
 # meant to diagnose.  Cap at 12 for readability.
-show_cols  = violators[:12] if len(violators) > 12 else violators
-colors_sch = [PALETTE[i % len(PALETTE)] for i in range(len(show_cols))]
-ax_sch.set_title(
-    "D.  Schoenfeld Residuals  (PH Assumption Check)\n"
-    f"Showing {len(show_cols)} PH-violating variables  (p < {PH_ALPHA})",
-    fontsize=12, fontweight="bold", pad=10,
-)
+# When violations exist, show only the violating variables.
+# When no violations, show a fixed set of substantively important variables
+# as a confirmatory diagnostic (flat residuals = PH assumption holds).
+DEFAULT_SCH_COLS = ["cease", "pko", "intgov", "natalks", "reaffirm", "termdur"]
+
+if violators:
+    show_cols = violators[:12] if len(violators) > 12 else violators
+    d_title   = (f"Schoenfeld Residuals — {len(show_cols)} PH-Violating "
+                 f"Variables (p\u00a0<\u00a0{PH_ALPHA})")
+else:
+    show_cols = [c for c in DEFAULT_SCH_COLS if c in ALL_NAMES]
+    d_title   = ("Schoenfeld Residuals — Key Variables\n"
+                 "No PH violations detected; flat smoother confirms assumption holds")
+
+colors_sch  = [PALETTE[i % len(PALETTE)] for i in range(len(show_cols))]
+all_smooths = []   # collect for auto y-axis after plotting
+
+ax_sch.set_title(d_title, fontsize=12, fontweight="bold", pad=10)
+
 for col, c in zip(show_cols, colors_sch):
     if col not in ALL_NAMES:
         continue
@@ -884,14 +946,22 @@ for col, c in zip(show_cols, colors_sch):
     w       = max(1, len(rs) // 10)
     smooth  = np.convolve(rs, np.ones(w) / w, mode="valid")
     tsm     = ts[w//2: w//2 + len(smooth)]
-    ax_sch.scatter(ts, rs, alpha=0.25, s=12, color=c)
-    lbl = (f"{LABELS[col].split(' [ref')[0].split('  ×')[0]}"
-           f"  ρ={rho:.2f}, p={pv:.3f} !")
-    ax_sch.plot(tsm, smooth, color=c, lw=2.0, label=lbl)
+    all_smooths.append(smooth)
+    flag = " !" if col in violators else ""
+    lbl  = (f"{LABELS[col].split(' [ref')[0].split('  ×')[0]}"
+            f"  \u03c1={rho:.2f}, p={pv:.3f}{flag}")
+    ax_sch.plot(tsm, smooth, color=c, lw=2.2, label=lbl)
+
 ax_sch.axhline(0, color="#888", lw=1, ls="--")
 ax_sch.set_xlabel("Time (years)", fontsize=10)
-ax_sch.set_ylabel("Schoenfeld residual", fontsize=10)
-ax_sch.legend(fontsize=7.5, loc="upper right", framealpha=0.85, edgecolor="#ccc")
+ax_sch.set_ylabel("Schoenfeld residual (smoothed)", fontsize=10)
+ax_sch.legend(fontsize=7.5, loc="best", framealpha=0.85, edgecolor="#ccc")
+
+# Fit y-axis tightly to the smoothed lines only (no scatter inflating range)
+if all_smooths:
+    concat   = np.concatenate(all_smooths)
+    y_pad    = (concat.max() - concat.min()) * 0.15
+    ax_sch.set_ylim(concat.min() - y_pad, concat.max() + y_pad)
 
 # ── E. PH-violating covariates: base coefficient + time interaction ───────────
 # Each PH-violating variable requires *two* rows — the base term (β₁) and the
@@ -942,12 +1012,12 @@ if ax_ext is not None and ext is not None:
     ax_ext.set_xlabel("Hazard Ratio (95% CI)", fontsize=10)
     ax_ext.set_xscale("log")
     ax_ext.xaxis.set_major_formatter(mticker.ScalarFormatter())
-    ax_ext.set_xlim(0.02, 80)
+    ax_ext.set_xlim(0.05, 20)
     ax_ext.set_title(
-        f"E.  PH-Violating Covariates — Base Coefficient (●/◆) + Time Interaction (■)  [β₁ + β₂·log(t)]\n"
-        f"Orange = base term β₁  (log-HR at t = 1 day);  Purple = interaction β₂  (log-HR change per unit log(t))  |  "
-        f"Pairs shaded together",
+        f"PH-Violating Covariates — Base Coefficient (●/◆) + Time Interaction (■)  [β₁ + β₂·log(t)]\n"
+        f"Orange = base term β₁  (log-HR at t = 1 day);  Purple = interaction β₂  (log-HR change per unit log(t))  ",
         fontsize=11, fontweight="bold", pad=10,
+        fontfamily="DejaVu Sans"
     )
     ax_ext_r = ax_ext.twinx()
     ax_ext_r.set_ylim(ax_ext.get_ylim())
