@@ -10,16 +10,32 @@ ACCENT   = "#2C3E6B"   # dark navy — header background
 ALT_ROW  = "#F2F5FA"   # light blue-grey — alternating row shading
 FONT     = "DejaVu Sans"
 
-# ── Load data ──────────────────────────────────────────────────────────────────
+# ── Load data & Preprocess ─────────────────────────────────────────────────────
 
 df = pd.read_csv("pad_merged.csv")
 df.columns = df.columns.str.strip()
 
+# Compute span_days for censored rows using censor_point
+df["censor_point"] = pd.to_datetime(df["censor_point"])
+df["pa_date"]      = pd.to_datetime(df["pa_date"])
+
+censored_mask = df["ended"].isna() | (df["ended"] != 1)
+df.loc[censored_mask, "span_days"] = (
+    df.loc[censored_mask, "censor_point"]
+    - df.loc[censored_mask, "pa_date"]
+).dt.days
+
+# Update span_years to match the newly calculated span_days
+df["span_years"] = df["span_days"] / 365.25
+
+df["ended"] = df["ended"].fillna(0)
+
 # ── Column groups ──────────────────────────────────────────────────────────────
 
 continuous_vars = {
-    "span_days": "Agreement duration (days)",
-    "span_years": "Agreement duration (years)",
+    "span_days":            "Agreement duration (days)",
+    "span_years":           "Agreement duration (years)",
+    "termdur":              "Term duration (years since last conflict)",
     "mtnest":               "Mountainous terrain (%)",
     "lmtnest":              "Mountainous terrain (log)",
     "gdp_per_capita":       "GDP per capita (USD)",
@@ -80,8 +96,41 @@ binary_vars = {
     "rebel_victory":      "Rebel victory",
 }
 
+categorical_vars = {
+    "region":          "Region",
+    "incompatibility": "Incompatibility",
+    "pa_type":         "Agreement type",
+    "frame":           "Framework",
+}
+
+category_mapping = {
+    "region": {
+        1: "Europe",
+        2: "Middle East",
+        3: "Asia",
+        4: "Africa",
+        5: "Americas"
+    },
+    "frame": {
+        1: "Process",
+        2: "Final",
+        3: "Reaffirming/Follow up"
+    },
+    "incompatibility": {
+        1: "Territory",
+        2: "Government",
+        3: "Both"
+    },
+    "pa_type": {
+        1: "Full",
+        2: "Partial",
+        3: "Peace Process"
+    }
+}
+
 # ── Build dataframes ───────────────────────────────────────────────────────────
 
+# Continuous variables
 cont_rows = []
 for col, label in continuous_vars.items():
     if col not in df.columns:
@@ -99,6 +148,7 @@ for col, label in continuous_vars.items():
     })
 cont_table = pd.DataFrame(cont_rows)
 
+# Binary variables
 bin_rows = []
 for col, label in binary_vars.items():
     if col not in df.columns:
@@ -113,6 +163,42 @@ for col, label in binary_vars.items():
     })
 bin_table = pd.DataFrame(bin_rows)
 
+# Categorical variables
+cat_rows = []
+for col, label in categorical_vars.items():
+    if col not in df.columns:
+        continue
+    
+    s = df[col]
+    
+    # Map the numerical categories to strings if a mapping exists
+    if col in category_mapping:
+        s = pd.to_numeric(s, errors="coerce").map(category_mapping[col])
+        
+    counts = s.value_counts(dropna=True)
+    missing = s.isna().sum()
+    total = counts.sum()
+    
+    for i, (val, count) in enumerate(counts.items()):
+        display_label = label if i == 0 else ""
+        cat_rows.append({
+            "Variable":   display_label,
+            "Category":   str(val),
+            "N":          f"{count:,}",
+            "Proportion": f"{count/total:.3f}" if total > 0 else "0.000",
+        })
+    
+    # Add a row for missing values if they exist
+    if missing > 0:
+        display_label = label if len(counts) == 0 else ""
+        cat_rows.append({
+            "Variable":   display_label,
+            "Category":   "Missing",
+            "N":          f"{missing:,}",
+            "Proportion": "-",
+        })
+cat_table = pd.DataFrame(cat_rows)
+
 # ── Render function ────────────────────────────────────────────────────────────
 
 def render_table(df_in, filename, note=None):
@@ -125,7 +211,12 @@ def render_table(df_in, filename, note=None):
     note_h = 0.35 if note else 0
     fig_h  = head_h + row_h * n_rows + note_h + 0.2
 
-    col_widths = [3.2] + [0.95] * (n_cols - 1)
+    # Give the categorical columns a slightly wider second column for category names
+    if "Category" in cols:
+        col_widths = [1.8, 2.0] + [0.95] * (n_cols - 2)
+    else:
+        col_widths = [3.2] + [0.95] * (n_cols - 1)
+        
     fig_w = sum(col_widths) + 0.3
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
@@ -159,8 +250,10 @@ def render_table(df_in, filename, note=None):
             facecolor=ACCENT, edgecolor="white", linewidth=0.5,
             clip_on=False,
         ))
-        ha    = "left" if ci == 0 else "center"
-        xtext = x0 + 0.008 if ci == 0 else (x0 + x1) / 2
+        # Left align the first couple of columns for the categorical tables
+        ha = "left" if ci == 0 or (ci == 1 and "Category" in cols) else "center"
+        xtext = x0 + 0.008 if ha == "left" else (x0 + x1) / 2
+        
         fig.text(
             xtext, data_top + header_h_frac / 2,
             col, ha=ha, va="center",
@@ -182,8 +275,10 @@ def render_table(df_in, filename, note=None):
                 facecolor=bg, edgecolor="#D0D7E5", linewidth=0.4,
                 clip_on=False,
             ))
-            ha    = "left" if ci == 0 else "center"
-            xtext = x0 + 0.008 if ci == 0 else (x0 + x1) / 2
+            
+            ha = "left" if ci == 0 or (ci == 1 and "Category" in cols) else "center"
+            xtext = x0 + 0.008 if ha == "left" else (x0 + x1) / 2
+            
             fig.text(
                 xtext, y_top - cell_h / 2,
                 str(val), ha=ha, va="center",
@@ -226,3 +321,4 @@ BIN_NOTE  = "Note: Proportion = share of non-missing observations coded 1."
 render_table(cont_table,  filename="desc_stats_continuous.png",  note=CONT_NOTE)
 render_table(bin_table_a, filename="desc_stats_binary_1.png",    note=None)
 render_table(bin_table_b, filename="desc_stats_binary_2.png",    note=BIN_NOTE)
+render_table(cat_table,   filename="desc_stats_categorical.png", note=None)
