@@ -50,6 +50,8 @@ from numpy.linalg import lstsq
 from scipy.stats import norm
 from sksurv.linear_model import CoxPHSurvivalAnalysis
 from sksurv.util import Surv
+from statsmodels.duration.hazard_regression import PHReg
+import scipy.stats as spstats
 
 warnings.filterwarnings("ignore")
 
@@ -652,20 +654,24 @@ if violators:
             t_start  = risk_event_times[k_idx - 1] if k_idx > 0 else 0.0
             t_stop   = tk
             is_event = bool(ei) and (ti == tk)
-            log_tk   = np.log(tk + 1)          # +1 guards against tk = 0
 
-            # Time-varying interaction terms evaluated at t_k
-            tv_vals = xi[viol_idx] * log_tk    # shape (n_violators,)
+            log_event_times = np.log1p(event_times_unique)
+            log_t_ref = log_event_times.mean()
+
+            log_tk_c = np.log1p(tk) - log_t_ref
+            tv_vals  = xi[viol_idx] * log_tk_c
 
             pp_rows.append(
                 np.concatenate([xi, tv_vals,
-                                [t_start, t_stop, float(is_event), float(cid)]])
+                                [t_start, t_stop, float(is_event), cid]])
             )
 
     pp_col_names = (ALL_NAMES
                     + [f"{col}:log(t)" for col in violators]
                     + ["t_start", "t_stop", "is_event", "conflict_id_pp"])
     df_pp = pd.DataFrame(pp_rows, columns=pp_col_names)
+    df_pp = df_pp.dropna(subset=["conflict_id_pp"])
+    df_pp["conflict_id_pp"] = df_pp["conflict_id_pp"].astype(int)
 
     print(f"\n  Person-period dataset: {len(df_pp):,} rows  "
           f"(from {len(t_all)} original observations, "
@@ -679,31 +685,104 @@ if violators:
 
     EXT_ALL = ALL_NAMES + EXT_NAMES
 
-    # ── Design matrix and outcome for the extended model ─────────────────────
-    X_ext_pp   = df_pp[EXT_ALL].values.astype(float)
-    t_start_pp = df_pp["t_start"].values.astype(float)
-    t_stop_pp  = df_pp["t_stop"].values.astype(float)
-    event_pp   = df_pp["is_event"].values.astype(bool)
-    cluster_pp = df_pp["conflict_id_pp"].values.astype(int)
+    df_pp = df_pp.replace([np.inf, -np.inf], np.nan)
+    df_pp = df_pp.dropna(subset=EXT_ALL + ["t_start", "t_stop", "is_event", "conflict_id_pp"])
+    df_pp = df_pp.loc[df_pp["t_stop"] > df_pp["t_start"]].copy()
 
-    # Standardise only the new tv columns (x_std * log(t_k) is not unit-free);
-    # the base columns are already standardised from the main model.
-    tv_arr    = X_ext_pp[:, len(ALL_NAMES):]
-    tv_mean   = tv_arr.mean(axis=0)
-    tv_sd     = tv_arr.std(axis=0);  tv_sd[tv_sd == 0] = 1.0
-    X_ext_pp_std = np.hstack([X_ext_pp[:, :len(ALL_NAMES)],
-                               (tv_arr - tv_mean) / tv_sd])
+    # ── Design matrix and outcome for the extended model ─────────────────────
+    X_ext_pp   = df_pp[EXT_ALL].to_numpy(dtype=float)
+    t_start_pp = df_pp["t_start"].to_numpy(dtype=float)
+    t_stop_pp  = df_pp["t_stop"].to_numpy(dtype=float)
+    event_pp   = df_pp["is_event"].to_numpy(dtype=int)
+    cluster_pp = df_pp["conflict_id_pp"].to_numpy(dtype=int)
+
+    # Remove the tv_mean / tv_sd logic and simply stack them:
+    tv_arr = X_ext_pp[:, len(ALL_NAMES):]
+
+    X_ext_pp_std = np.hstack([
+        X_ext_pp[:, :len(ALL_NAMES)], 
+        tv_arr  # Use the raw standardized_X * centered_log_t
+    ])
+
+    # Remove EXT_SD adjustments for the TV terms below
+    # or set their SD to 1.0 so your math later doesn't break:
+    tv_sd = np.ones(tv_arr.shape[1])
     EXT_SD = np.concatenate([ALL_SD, tv_sd])
 
     y_ext = Surv.from_arrays(event=event_pp, time=t_stop_pp)
 
-    print(f"\nFitting extended model  "
+    # ── Fit extended model via statsmodels PHReg (supports entry/start times) ────
+    #
+    #  scikit-survival has no entry-time support (github.com/sebp/scikit-survival/issues/8),
+    #  so the counting-process risk-set restriction cannot be enforced there.
+    #  statsmodels PHReg accepts entry= (left-truncation time), which correctly
+    #  includes each pseudo-row in the risk set only for the single interval
+    #  [t_start, t_stop] it represents, fixing both:
+    #    1. the likelihood (risk sets are now exact), and
+    #    2. the SEs (within-subject rows are clustered via groups=).
+
+    print(f"\nFitting extended model via statsmodels PHReg  "
           f"({len(violators)} time-varying term(s): "
           f"{', '.join(violators)})  ...", end="", flush=True)
-    ext_std = fit_clustered(X_ext_pp_std, y_ext, t_stop_pp,
-                            event_pp.astype(float), cluster_pp)
-    ext     = back_transform(ext_std, EXT_SD)
-    print(" done")
+
+    # NOTE: robust=True and groups= are NOT constructor parameters for PHReg.
+    # entry= IS a constructor parameter (left-truncation / start time).
+    # Cluster-robust (Lin-Wei) SEs are requested by passing groups= to .fit().
+    sm_model = PHReg(
+        endog  = t_stop_pp,
+        exog   = X_ext_pp_std,
+        status = event_pp,
+        entry  = t_start_pp,       # counting-process entry: enforces correct risk sets
+        ties   = "efron",
+    )
+    sm_res_base = sm_model.fit(method='bfgs', maxiter=1000, disp=False)
+    sm_res      = sm_model.fit(groups=cluster_pp, method = 'bfgs', maxiter=1000, disp=False)
+
+    print(f"\n  Diagnostic — params NaN (base / clustered): "
+          f"{np.isnan(sm_res_base.params).sum()} / {np.isnan(sm_res.params).sum()}")
+    print(f"  Diagnostic — bse NaN   (base / clustered): "
+          f"{np.isnan(sm_res_base.bse).sum()} / {np.isnan(sm_res.bse).sum()}")
+
+    # ── Cluster-robust SEs: manual Lin-Wei sandwich if statsmodels returns NaN ─
+    #
+    #  V_cluster = H⁻¹ · B · H⁻¹
+    #  where H⁻¹ = sm_res_base.cov_params()  (inverse Hessian, already inverted)
+    #  and   B   = Σ_g  (Σ_{i∈g} sᵢ)(Σ_{i∈g} sᵢ)ᵀ   (meat of the sandwich)
+    #  sᵢ are the per-row score residuals from the un-clustered fit.
+
+    if np.isnan(sm_res.bse).any():
+        print("  Clustered bse is NaN — computing sandwich manually.")
+        score_r = sm_res_base.score_residuals          # shape (n_rows, n_params)
+        H_inv   = sm_res_base.cov_params()             # shape (n_params, n_params)
+
+        # Accumulate meat B by cluster
+        B = np.zeros_like(H_inv)
+        for cid in np.unique(cluster_pp):
+            mask = cluster_pp == cid
+            g    = score_r[mask].sum(axis=0)           # sum scores within cluster
+            B   += np.outer(g, g)
+
+        V_cluster = H_inv @ B @ H_inv
+        se_std    = np.sqrt(np.diag(V_cluster))
+    else:
+        se_std = sm_res.bse
+
+    coef_std = sm_res_base.params     # point estimates always from base fit
+
+    coef_orig = coef_std / EXT_SD
+    se_orig   = se_std   / EXT_SD
+
+    z_stat = coef_orig / se_orig
+    p_vals = 2.0 * (1.0 - spstats.norm.cdf(np.abs(z_stat)))
+
+    ext = {
+        "hr":         np.exp(coef_orig),
+        "hr_lo":      np.exp(coef_orig - 1.96 * se_orig),
+        "hr_hi":      np.exp(coef_orig + 1.96 * se_orig),
+        "p":          p_vals,
+        "loglik":     sm_res.llf,
+        "n_clusters": int(len(np.unique(cluster_pp))),
+    }
 
     FULL_LABELS = {**LABELS, **EXT_LABELS}
 
