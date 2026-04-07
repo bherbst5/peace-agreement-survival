@@ -295,21 +295,8 @@ e_all = df["event"].values          # bool array for sksurv
 #      the other's estimate.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── PH VIOLATORS FROM baseline_cox_full.py ────────────
-VIOLATORS = [
-    # "elections", 
-    # "regdev", 
-    # "locgov", 
-    # "government_victory", 
-    # "log_gdp_pc", 
-    # "v2x_polyarchy", 
-    # "v2x_liberal", 
-    # "region_middleeast", 
-    # "incomp_gov", 
-    # "ddr::intarmy", 
-    # "pp::elections", 
-    # "reaffirm::co_impl"
-]
+# ── PH VIOLATORS ────────────
+VIOLATORS = []
 # ─────────────────────────────────────────────────────────────────────────────
 
 TV_NAMES = [f"{v}:log(t)" for v in VIOLATORS]
@@ -577,7 +564,7 @@ print("─" * 60 + "\n")
 #     X_b = X_std[idx_b] inherits the correct TV value for each resampled
 #     subject without any re-expansion step.
 # ═══════════════════════════════════════════════════════════════════════════════
-B         = 200
+B         = 1000
 boot_coef = np.zeros((B, p))
 print(f"Bootstrap CIs at lambda_min  (B={B})  ...", end="", flush=True)
 
@@ -877,7 +864,7 @@ for i, (k, yi) in enumerate(zip(important_idx, y_b)):
                 va="center", fontsize=9, color=d_color, fontweight="bold",
                 fontfamily="DejaVu Sans")
 ax_imp.set_yticks(y_b)
-ax_imp.set_yticklabels(short, fontsize=9.7)
+ax_imp.set_yticklabels(short, fontsize=8)
 for ytick, k in zip(ax_imp.get_yticklabels(), important_idx):
     ytick.set_color(imp_color[k])
 ax_imp.set_xlabel("Coefficient Magnitude", fontsize=10)
