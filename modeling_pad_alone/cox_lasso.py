@@ -40,7 +40,7 @@ np.random.seed(42)
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1.  DATA PREP
 # ═══════════════════════════════════════════════════════════════════════════════
-df = pd.read_excel("~/thesis/surv_modeling/PAD_final.xlsx")
+df = pd.read_excel("~/thesis/surv_modeling/modeling_pad_alone/PAD_final.xlsx")
 df = df.rename(columns={"ref ": "ref", "return ": "return"})
 
 # ── Compute span_days for censored rows using censor_point ───────────────────
