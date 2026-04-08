@@ -1,6 +1,6 @@
 # Peace Agreement Duration — Survival Analysis
 
-Code for: *[Toward Durable Peacemaking: Evaluating Intrastate Peace Agreement Provisions via Penalized Survival Analysis]*)
+Code for: *[Toward Durable Peace Agreements: Provision Selection and Contextual Risk in Intrastate Conflict Resolution]*)
 
 ---
 

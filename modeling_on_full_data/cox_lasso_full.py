@@ -752,8 +752,7 @@ ax2.spines["right"].set_visible(False)
 ax_path.set_xlabel("log(lambda)  →  increasing regularization", fontsize=10, fontfamily="DejaVu Sans")
 ax_path.set_ylabel("Coefficient (original scale)", fontsize=10)
 ax_path.set_title("Lasso Coefficient Path\n"
-                  "(colored = selected at lambda_min;  grey = zeroed out;"
-                  "  dashed = time-varying term)",
+                  "(colored = selected at lambda_min;  grey = zeroed out)",
                   fontsize=11.5, fontweight="bold", pad=10)
 
 path_legend_handles = [
@@ -840,7 +839,7 @@ for ytick, k in zip(ax_fp.get_yticklabels(), important_idx):
 ax_fp.set_xlabel("Coefficient beta  (95% bootstrap CI)", fontsize=10)
 ax_fp.set_title(
     f"Forest Plot of {n_nonzero_min} Selected Predictors at lambda_min\n"
-    f"(◆ = CI excludes 0; sorted by value)",
+    f"(◆ = CI excludes 0)",
     fontsize=11.5, fontweight="bold", pad=10, fontfamily="DejaVu Sans"
 )
 
