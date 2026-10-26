@@ -1,3 +1,5 @@
+import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,8 +8,8 @@ from matplotlib.colors import to_rgba
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-ACCENT   = "#2C3E6B"   # dark navy — header background
-ALT_ROW  = "#F2F5FA"   # light blue-grey — alternating row shading
+ACCENT   = "#2C3E6B"   # dark navy : header background
+ALT_ROW  = "#F2F5FA"   # light blue-grey : alternating row shading
 FONT     = "DejaVu Sans"
 
 # ── Data ───────────────────────────────────────────────────────────────────────

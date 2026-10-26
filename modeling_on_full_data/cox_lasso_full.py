@@ -1,5 +1,5 @@
 """
-Lasso-Penalized Cox Proportional Hazards Model  —  scikit-survival version
+Lasso-Penalized Cox Proportional Hazards Model: scikit-survival version
 ===========================================================================
 Direct comparison counterpart to the baseline Cox Proportional Hazards model.
 
@@ -27,7 +27,9 @@ Requirements
     pip install scikit-survival openpyxl matplotlib pandas numpy
 """
 
+import os
 import warnings
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -36,7 +38,6 @@ from numpy.linalg import lstsq
 from sksurv.linear_model import CoxnetSurvivalAnalysis
 from sksurv.util import Surv
 from sklearn.model_selection import KFold
-from sklearn.model_selection import StratifiedKFold
 
 warnings.filterwarnings("ignore")
 np.random.seed(42)
@@ -70,6 +71,14 @@ if n_before != n_after:
 
 df["event"] = (df["ended"] == 1).astype(bool)   # sksurv needs bool
 df["t"]     = df["span_days"].astype(float)
+bad_time = ~np.isfinite(df["t"]) | (df["t"] <= 0)
+if bad_time.any():
+    print(f"  [INFO] Dropped {int(bad_time.sum())} rows with nonpositive duration")
+    df = df.loc[~bad_time].copy()
+if (df["termdur"] == -99).any():
+    n_sentinel = int((df["termdur"] == -99).sum())
+    print(f"  [INFO] Recoded termdur -99 to 0 ({n_sentinel} rows)")
+    df["termdur"] = df["termdur"].replace(-99, 0)
 
 
 # ── External variable prep (merged dataset) ───────────────────────────────────
@@ -127,7 +136,7 @@ EXTERNAL_CONT = [
     "gdp_growth",         # Hegre & Sambanis 2006 + Walter 2015: economic growth (t-1)
     "log_milper",         # Hegre & Sambanis 2006: state military size (log)
     "v2x_polyarchy",      # V-Dem electoral democracy index (0-1)
-    "log_v2regdur",       # Regime duration in days (log) — regime stability
+    "log_v2regdur",       # Regime duration in days (log) : regime stability
     "v2x_freexp_altinf",  # Walter 2015: media freedom (0-1)
     "v2x_liberal",        # Walter 2015: liberal political institutions (0-1)
     "v2x_partip",         # Walter 2015: political participation (0-1)
@@ -266,7 +275,6 @@ ia_sd    = X_ia.std(axis=0)
 ia_sd[ia_sd == 0] = 1.0
 X_ia_std = (X_ia - ia_mean) / ia_sd
 
-# Final matrix containing all 52 columns
 X_std = np.hstack([X_base_std, X_ia_std])  
 X_sd_full = np.concatenate([X_sd, ia_sd])
 
@@ -346,7 +354,7 @@ if VIOLATORS:
           f"design matrix now {p} columns")
     print(f"  TV terms: {', '.join(TV_NAMES)}")
 else:
-    print("  VIOLATORS list is empty — no time-varying terms added.")
+    print("  VIOLATORS list is empty : no time-varying terms added.")
     print("  Populate VIOLATORS from baseline_cox_full.py PH-test output.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -358,7 +366,7 @@ print("─" * 60)
 
 e_float = e_all.astype(float)
 
-# sksurv structured array — uses original (non-person-period) t_all / e_all
+# sksurv structured array : uses original (non-person-period) t_all / e_all
 y_surv = Surv.from_arrays(event=e_all, time=t_all)
 
 sep_warnings = 0
@@ -395,7 +403,7 @@ print(f"Design matrix: {p} columns  "
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2.  CORE HELPER: partial log-likelihood
-#     (Breslow, scaled by 1/n_events — identical to custom code)
+#     (Breslow, scaled by 1/n_events : identical to custom code)
 # ═══════════════════════════════════════════════════════════════════════════════
 def partial_loglik(beta, X, t, e):
     """Mean partial log-likelihood (Breslow), scaled by n_events."""
@@ -559,22 +567,17 @@ print("─" * 60 + "\n")
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7.  BOOTSTRAP 95% CIs  (λ_min model, fixed-λ)
 #
-#     Resampling is at the subject level (rows of X_std).  Each row already
-#     encodes that subject's TV term x_j*log(t_i), so the bootstrap sample
-#     X_b = X_std[idx_b] inherits the correct TV value for each resampled
-#     subject without any re-expansion step.
+#     Failed replicates are left missing: filling them with the point
+#     estimate would pull the percentile interval inward.
+#     A second resample draws whole conflicts, which is the bootstrap
+#     counterpart of the Lin-Wei standard errors in the unpenalized model.
 # ═══════════════════════════════════════════════════════════════════════════════
-B         = 1000
-boot_coef = np.zeros((B, p))
-print(f"Bootstrap CIs at lambda_min  (B={B})  ...", end="", flush=True)
+B = 200
 
-for b in range(B):
-    idx_b = np.random.choice(n, n, replace=True)
-    X_b   = X_std[idx_b]
-    y_b   = y_surv[idx_b]
-    if y_b["event"].sum() < 5:
-        boot_coef[b] = beta_min_std
-        continue
+def _boot_coef(idx):
+    y_b = y_surv[idx]
+    if int(y_b["event"].sum()) < 5:
+        return None, "fewer than 5 events"
     bm = CoxnetSurvivalAnalysis(
         l1_ratio=1.0,
         alphas=[float(lam_best)],
@@ -584,21 +587,60 @@ for b in range(B):
         tol=1e-7,
     )
     try:
-        bm.fit(X_b, y_b)
-        boot_coef[b] = bm.coef_.ravel()
-    except Exception:
-        boot_coef[b] = beta_min_std
-    if b % 50 == 0:
-        print(".", end="", flush=True)
+        bm.fit(X_std[idx], y_b)
+    except Exception as err:
+        return None, f"{type(err).__name__}: {err}"
+    return bm.coef_.ravel(), None
 
-print(" done")
+def _run_bootstrap(draw_index, label):
+    coefs = np.full((B, p), np.nan)
+    n_fail = 0
+    first_fail = None
+    print(f"Bootstrap CIs at lambda_min  ({label}, B={B})  ...", end="", flush=True)
+    for b in range(B):
+        coef, err = _boot_coef(draw_index(b))
+        if coef is None:
+            n_fail += 1
+            first_fail = first_fail or err
+        else:
+            coefs[b] = coef
+        if b % 50 == 0:
+            print(".", end="", flush=True)
+    print(f" done  ({B - n_fail}/{B} fits)")
+    if first_fail:
+        print(f"  first failed replicate: {first_fail}")
+    orig = coefs / X_sd_full[None, :]
+    lo = np.nanpercentile(orig, 2.5, axis=0)
+    hi = np.nanpercentile(orig, 97.5, axis=0)
+    return lo, hi
 
-boot_orig = boot_coef / X_sd_full[None, :]
-ci_lo     = np.percentile(boot_orig, 2.5,  axis=0)
-ci_hi     = np.percentile(boot_orig, 97.5, axis=0)
+ci_lo, ci_hi = _run_bootstrap(
+    lambda _b: np.random.choice(n, n, replace=True),
+    "agreements",
+)
 hr_min    = np.exp(beta_min)
 hr_lo_min = np.exp(ci_lo)
 hr_hi_min = np.exp(ci_hi)
+
+if len(df) != n:
+    raise RuntimeError(f"design matrix has {n} rows but the data frame has {len(df)}")
+raw_ids = df["conflict_id"].to_numpy()
+cluster_labels = raw_ids.astype(object)
+for i in np.flatnonzero(pd.isna(raw_ids)):
+    cluster_labels[i] = f"unclustered-{i}"
+members = [np.flatnonzero(cluster_labels == u) for u in pd.unique(cluster_labels)]
+cluster_rng = np.random.default_rng(42)
+
+def _draw_clusters(_b):
+    drawn = cluster_rng.integers(0, len(members), size=len(members))
+    return np.concatenate([members[int(i)] for i in drawn])
+
+ci_lo_cl, ci_hi_cl = _run_bootstrap(
+    _draw_clusters,
+    f"conflicts, G={len(members)}",
+)
+hr_lo_cl = np.exp(ci_lo_cl)
+hr_hi_cl = np.exp(ci_hi_cl)
 
 # "unpenalized" = coefficients at lam_min (least-regularized point on path)
 beta_unpen = path_orig[:, -1]
@@ -612,7 +654,7 @@ important_idx = sorted(
 # 8.  CONSOLE SUMMARY
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n" + "═" * 74)
-print("  LASSO-PENALIZED COX PH MODEL (scikit-survival) — Summary")
+print("  LASSO-PENALIZED COX PH MODEL (scikit-survival) : Summary")
 print("═" * 74)
 print(f"  lambda_min = {lam_best:.5f}  → {n_nonzero_min} non-zero  |  "
       f"lambda_1SE = {lam_1se:.5f}  → {n_nonzero_1se} non-zero")
@@ -633,6 +675,17 @@ for k in sorted(range(p), key=lambda k: beta_min[k], reverse=True):
     tv_tag = "  [tv]" if COVARIATE_NAMES[k] in TV_NAMES else ""
     print(f"  {LABELS[COVARIATE_NAMES[k]]:<47} {b:+8.4f}  {hr:7.3f}"
           f"  ({lo:.3f}-{hi:.3f}){sig}{tv_tag}")
+
+print(f"\n── conflict-cluster bootstrap  (same penalty, B={B}) ──────────────────────")
+print(f"  {'Covariate':<47} {'HR':>7}  95% cluster CI")
+print("  " + "─" * 72)
+for k in sorted(range(p), key=lambda k: beta_min[k], reverse=True):
+    if abs(beta_min[k]) < 1e-6:
+        continue
+    lo, hi = hr_lo_cl[k], hr_hi_cl[k]
+    sig = "  ***" if (lo > 1 or hi < 1) else ""
+    print(f"  {LABELS[COVARIATE_NAMES[k]]:<47} {hr_min[k]:7.3f}"
+          f"  ({lo:.3f}-{hi:.3f}){sig}")
 
 zeroed = [COVARIATE_NAMES[k] for k in range(p) if abs(beta_min[k]) < 1e-6]
 print(f"\n  Zeroed-out ({len(zeroed)}): {', '.join(zeroed)}\n")
@@ -665,7 +718,7 @@ if TV_NAMES:
         tv_str    = "yes" if tv_sel   else "zeroed"
         note = ""
         if tv_sel and not base_sel:
-            note = "  [!] TV retained, base zeroed — interpret beta_2 alone as "  \
+            note = "  [!] TV retained, base zeroed : interpret beta_2 alone as "  \
                    "effect change per log(t) unit vs. baseline of 0"
         print(f"  {v:<35} {base_str:>14}  {tv_str:>12}{note}")
     print(f"\n  [tv] interpretation: effect of x at time t = "
@@ -702,7 +755,7 @@ n_show    = len(important_idx)
 fig_h     = max(18, 4 + n_show * 0.55)
 fig       = plt.figure(figsize=(20, fig_h), facecolor="#FAFAF7")
 fig.suptitle(
-    "Lasso-Penalized Cox PH (scikit-survival) — Peace Agreement Duration  "
+    "Lasso-Penalized Cox PH (scikit-survival) : Peace Agreement Duration  "
     f"({p} predictors → {n_nonzero_min} selected at lambda_min)",
     fontsize=16, fontweight="bold", y=0.998, color="#1a1a1a",
 )
