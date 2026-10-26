@@ -1,101 +1,112 @@
-# Peace Agreement Duration — Survival Analysis
+# Peace Agreement Duration: Survival Analysis
 
 Code for: *[Toward Durable Peace Agreements: Provision Selection and Contextual Risk in Intrastate Conflict Resolution]*
 
----
+Survival analysis of peace agreement duration. The outcome is time to agreement collapse. Agreements still in force on December 31, 2021 are right-censored.
 
-## Overview
+The repository has two modeling tracks. `modeling_pad_alone` uses the Peace Agreement Dataset (PAD) provisions only. `modeling_on_full_data` adds external context (V-Dem indices, conflict history, and macroeconomic indicators).
 
-This repository contains all analysis code, data processing scripts, and output figures for a survival analysis of peace agreement duration. The outcome of interest is time to agreement collapse (failure), with agreements still in force at the end of the observation window (December 31, 2021) treated as right-censored.
+Three approaches are implemented:
 
-The project has evolved to analyze both the foundational provisions of the agreements and the broader macro-political/economic contexts in which they were signed. As such, the repository is divided into models run exclusively on the Peace Agreement Dataset (PAD) and models run on a fully merged dataset containing external covariates (e.g., V-Dem indices, conflict history, and macroeconomic indicators).
-
-Three primary analytical approaches are implemented:
-* Kaplan-Meier non-parametric survival curves (stratified by key covariates)
-* Baseline Cox Proportional Hazards models (with cluster-robust standard errors and extended time-varying terms for proportional hazards violators)
-* LASSO-penalized Cox Proportional Hazards models (featuring 5-fold cross-validation with the Verweij–Van Houwelingen correction and bootstrap confidence intervals)
+* Kaplan-Meier curves, with a multivariate log-rank test
+* Unpenalized Cox proportional hazards models, with conflict-clustered standard errors and time-varying terms for proportional-hazards violators
+* LASSO-penalized Cox models, with 5-fold cross-validation on held-out partial log-likelihood (Verweij-van Houwelingen) and bootstrap confidence intervals
 
 ---
 
 ## Repository Structure
 
-### 1. Primary Analysis (`/modeling_on_full_data`)
-This directory contains the main analysis utilizing the expanded 67-predictor dataset.
+### 1. Full merged analysis (`modeling_on_full_data`)
+
+67-predictor models on PAD plus external covariates.
 
 | File | Description |
 | :--- | :--- |
-| `pad_merged.csv` | Primary dataset (PAD merged with external macroeconomic and conflict variables) |
-| `kaplan_meier_full.py` | Generates stratified Kaplan-Meier curves and log-rank tests |
-| `baseline_cox_full.py` | Unpenalized Cox PH model, PH assumption testing, and extended time-varying model |
-| `cox_lasso_full.py` | LASSO-penalized Cox PH via scikit-survival, featuring variable selection |
-| `*.png` files | Output visualizations (LASSO paths, baseline results, univariate forest plots) |
+| `pad_merged.csv` | PAD merged with external macroeconomic and conflict variables |
+| `kaplan_meier_full.py` | Stratified Kaplan-Meier curves and log-rank tests |
+| `baseline_cox_full.py` | Unpenalized Cox model, proportional-hazards tests, and the extended time-varying model |
+| `cox_lasso_full.py` | LASSO-penalized Cox model and bootstrap intervals |
+| `robustness_checks.py` | Region-stratified Cox models, a within-region LASSO, and bounds for the dropped agreements |
+| `paper_figures.py` | Vector PDFs of the regional Kaplan-Meier curves and the LASSO variable-importance chart |
+| `robustness_data/pad_v221_model_frame.csv` | PAD v22.1 model frame, with an interstate flag from UCDP/PRIO ACD v22.1 |
+| `robustness_data/robustness_summary.csv` | Stratified-Cox table written by `robustness_checks.py` |
+| `robustness_data/reported_lasso.csv` | Coefficients and hazard ratios at \(\lambda = 0.040\), plus agreement-level and conflict-level bootstrap intervals. `cluster_zero_share` is the share of conflict-level draws set to zero; draws kept equal \(200 \times (1 - \texttt{cluster\_zero\_share})\) |
+| `*.png` | LASSO paths, baseline results, and forest plots written beside the scripts |
 
-### 2. Exploratory Data Analysis (`/modeling_on_full_data/descriptive_stats`)
-Scripts and outputs for visualizing the distributions of the merged dataset.
-
-| File | Description |
-| :--- | :--- |
-| `desc_stats.py` | Generates summary statistics and distribution visualizations |
-| `*.png` files | Output plots for continuous, categorical, and binary predictors |
-
-### 3. Data Summaries (`/modeling_on_full_data/provision_table`)
-| File | Description |
-| :--- | :--- |
-| `produce_prov_table.py` | Script to generate a formatted summary table of PAD provisions |
-| `pad_provisions_table.png` | Output visualization of the provision frequencies |
-
-### 4. Legacy / Base PAD Analysis (`/modeling_pad_alone`)
-This directory contains the initial modeling pipeline run exclusively on the base PAD data, prior to the inclusion of external covariates.
+### 2. Descriptive statistics (`modeling_on_full_data/descriptive_stats`)
 
 | File | Description |
 | :--- | :--- |
-| `PAD_final.xlsx` | Base dataset derived directly from UCDP PAD |
-| `*.py` files | Base scripts for Kaplan-Meier, Cox PH, and LASSO models |
+| `desc_stats.py` | Summary statistics and distribution plots. Reads `../pad_merged.csv` |
+| `*.png` | Plots for continuous, categorical, and binary predictors |
+
+### 3. Provision table (`modeling_on_full_data/provision_table`)
+
+| File | Description |
+| :--- | :--- |
+| `produce_prov_table.py` | Formatted table of PAD provisions |
+| `pad_provisions_table.png` | Rendered table |
+
+### 4. PAD-only analysis (`modeling_pad_alone`)
+
+The same Kaplan-Meier, Cox, and LASSO pipeline on PAD provisions alone (52 predictors).
+
+| File | Description |
+| :--- | :--- |
+| `PAD_final.xlsx` | Analysis file derived from UCDP PAD |
+| `kaplan_meier.py` | Stratified Kaplan-Meier curves and log-rank tests |
+| `baseline_cox.py` | Unpenalized Cox model with clustered standard errors |
+| `cox_lasso.py` | LASSO-penalized Cox model and bootstrap intervals |
 
 ---
 
 ## Model Specification
 
-The primary scripts in the `modeling_on_full_data` directory share a comprehensive 67-column design matrix:
-* **28** binary peace agreement provision indicators
-* **5** external binary context variables (e.g., prior rebel victory, neighbor at war)
-* **1** continuous variable from PAD (term duration)
-* **10** continuous external covariates (standardized prior to estimation)
-* **10** dummy-encoded categorical variables (region, incompatibility type, agreement type, frame)
-* **13** theoretically-motivated interaction terms
+`modeling_on_full_data` uses a 67-column design matrix:
 
-**Methodological Notes:**
-* **Interactions:** Constructed as products of standardized main effects, then orthogonalized against their constituent predictors to prevent lower-order confounding.
-* **Clustering:** Agreements are clustered within conflicts. All unpenalized Cox model standard errors are cluster-robust (Lin-Wei sandwich estimator).
-* **Time-Varying Covariates:** The baseline model evaluates proportional hazards (PH) assumptions via Schoenfeld residuals. Violators are re-entered as time-varying terms using a person-period expansion via `statsmodels`.
+* **28** binary peace-agreement provisions
+* **5** external binary context variables (prior rebel victory, neighbor at war, and related flags)
+* **1** PAD ordinal variable (years since last conflict)
+* **10** continuous external covariates, standardized before estimation
+* **10** dummy variables (region, incompatibility, agreement type, and frame)
+* **13** interaction terms
+
+`modeling_pad_alone` uses the same provision, dummy, and interaction blocks without the external covariates (52 columns).
+
+**Methodological notes:**
+
+* **Interactions.** Products of standardized main effects, then residualized on those main effects and an intercept.
+* **Clustering.** Agreements are clustered by conflict. Unpenalized Cox standard errors use the Lin-Wei sandwich estimator. A missing `conflict_id` is its own cluster.
+* **Bootstrap.** LASSO intervals use 200 resamples. One resample draws agreements and another draws whole conflicts. Failed fits are omitted. A draw shrunk to exactly zero is counted separately, because treating it as an HR of 1 pins a percentile endpoint on 1. That endpoint means the term was dropped in at least 2.5% of draws. The number of conflict-level draws that keep a term is \(200 \times (1 - \texttt{cluster\_zero\_share})\).
+* **Durations.** Nonpositive durations are dropped. A `termdur` code of −99 is recoded to 0.
+* **Proportional hazards.** The baseline model tests the assumption with Schoenfeld residuals. Violators can be re-entered as time-varying terms through a person-period expansion in `statsmodels`. The violator list in the LASSO scripts starts empty. `robustness_checks.py` reports the Grambsch–Therneau flags and a national-dialogue \(\log(t)\) term, and does not add time-varying terms to the reported fit.
 
 ---
 
 ## Data Sources
 
-The foundational dataset is derived from the [UCDP Peace Agreement Dataset (PAD) version 22.1](https://ucdp.uu.se/downloads/#peaceagreement), maintained by the Uppsala Conflict Data Program.
-
-Variable definitions follow the official PAD codebook. External covariates were joined from standard international relations datasets (e.g., V-Dem, World Bank).
+The agreements come from the [UCDP Peace Agreement Dataset (PAD) version 22.1](https://ucdp.uu.se/downloads/#peaceagreement). Variable definitions follow the PAD codebook. External covariates were joined from V-Dem, conflict history, and macroeconomic series. Interstate agreements in the robustness frame are flagged from UCDP/PRIO Armed Conflict Dataset v22.1 (`type_of_conflict == 2`).
 
 ---
 
 ## Requirements
 
-Python 3.8 or higher is required. Install the necessary dependencies using `pip`:
+Install the pinned dependencies with:
 
 ```bash
-pip install scikit-survival pandas numpy matplotlib openpyxl scipy scikit-learn statsmodels
+pip install -r requirements.txt
 ```
 
-*Note: Tested with scikit-survival 0.23.1.*
+The LASSO fits use scikit-survival 0.23.1. The pins were installed on Python 3.12.
 
 ## Usage
 
-To reproduce the analysis, run the scripts from within their respective directories. For example, to run the primary LASSO analysis:
+Scripts locate their data from their own file path, so they can be run from any working directory. Console output and figures are written next to the script that produced them.
 
 ```bash
-cd modeling_on_full_data
-python cox_lasso_full.py
+python modeling_on_full_data/cox_lasso_full.py
+python modeling_on_full_data/robustness_checks.py
+python modeling_on_full_data/paper_figures.py
 ```
 
-Each script will output diagnostic information to the console and save the corresponding high-resolution figures directly to the working directory.
+`paper_figures.py` writes `KaplanMeierByRegion.pdf` and `VARIABLEIMPORTANCE.pdf` to `papers/`.

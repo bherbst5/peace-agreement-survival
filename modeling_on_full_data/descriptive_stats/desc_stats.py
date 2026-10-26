@@ -1,3 +1,5 @@
+import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,13 +8,13 @@ from matplotlib.colors import to_rgba
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-ACCENT   = "#2C3E6B"   # dark navy — header background
-ALT_ROW  = "#F2F5FA"   # light blue-grey — alternating row shading
+ACCENT   = "#2C3E6B"   # dark navy : header background
+ALT_ROW  = "#F2F5FA"   # light blue-grey : alternating row shading
 FONT     = "DejaVu Sans"
 
 # ── Load data & Preprocess ─────────────────────────────────────────────────────
 
-df = pd.read_csv("pad_merged.csv")
+df = pd.read_csv("../pad_merged.csv")
 df.columns = df.columns.str.strip()
 
 # Compute span_days for censored rows using censor_point
@@ -35,7 +37,7 @@ df["ended"] = df["ended"].fillna(0)
 continuous_vars = {
     "span_days":            "Agreement duration (days)",
     "span_years":           "Agreement duration (years)",
-    "termdur":              "Term duration (years since last conflict)",
+    "termdur":              "Years since last conflict",
     "mtnest":               "Mountainous terrain (%)",
     "lmtnest":              "Mountainous terrain (log)",
     "gdp_per_capita":       "GDP per capita (USD)",
@@ -225,7 +227,7 @@ def render_table(df_in, filename, note=None):
 
     margin_l = 0.02
     margin_r = 0.02
-    table_top = 1.0  # no title bar — table starts at the very top
+    table_top = 1.0  # no title bar : table starts at the very top
 
     total_w = sum(col_widths)
     cum_w   = 0

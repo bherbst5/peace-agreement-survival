@@ -11,6 +11,8 @@ Nine plots produced in a 5-row layout:
   Row 4: By intgov (integration of rebels into government provision)  [full width]
 """
 
+import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -45,9 +47,16 @@ def km_curve(durations, events):
     n_risk = np.array(n_list,       float)
 
     S          = np.cumprod(1 - d / n_risk)
-    greenwood  = np.cumsum(d / (n_risk * (n_risk - d + 1e-12)))
-    log_log_S  = np.log(-np.log(S + 1e-12))
-    var_ll     = greenwood / (np.log(S + 1e-12) ** 2 + 1e-12)
+    # Greenwood is undefined when a death empties the risk set. That term is
+    # omitted; adding a tiny number in the denominator would explode the band.
+    denom      = n_risk * (n_risk - d)
+    incr       = np.zeros_like(d)
+    ok         = denom > 0
+    incr[ok]   = d[ok] / denom[ok]
+    greenwood  = np.cumsum(incr)
+    s_clip     = np.clip(S, 1e-12, 1 - 1e-12)
+    log_log_S  = np.log(-np.log(s_clip))
+    var_ll     = greenwood / np.log(s_clip) ** 2
     z          = 1.96
     lower      = np.exp(-np.exp(log_log_S + z * np.sqrt(var_ll)))
     upper      = np.exp(-np.exp(log_log_S - z * np.sqrt(var_ll)))
@@ -62,29 +71,44 @@ def km_curve(durations, events):
 # ── log-rank test ─────────────────────────────────────────────────────────────
 
 def log_rank_test(groups):
-    """k-sample log-rank test; returns p-value."""
-    all_times = np.unique(
-        np.concatenate([g[0][g[1] == 1] for g in groups])
-    )
-    O_list, E_list = [], []
-    for durations, events in groups:
-        durations = np.asarray(durations, float)
-        events    = np.asarray(events,    float)
-        O_j, E_j  = [], []
-        for ti in all_times:
-            d_j = ((durations == ti) & (events == 1)).sum()
-            n_j = (durations >= ti).sum()
-            d   = sum(((np.asarray(g[0]) == ti) & (np.asarray(g[1]) == 1)).sum()
-                      for g in groups)
-            n   = sum((np.asarray(g[0]) >= ti).sum() for g in groups)
-            O_j.append(d_j)
-            E_j.append(n_j * d / n if n > 0 else 0)
-        O_list.append(np.sum(O_j))
-        E_list.append(np.sum(E_j))
-    O    = np.array(O_list)
-    E    = np.array(E_list)
-    stat = np.sum((O - E) ** 2 / (E + 1e-12))
-    return 1 - chi2.cdf(stat, df=len(groups) - 1)
+    """Multivariate log-rank test. Returns a chi-square p-value on k-1 df.
+
+    The covariance is the hypergeometric variance of the death counts, so the
+    statistic accounts for the dependence among groups. Summing (O-E)^2/E over
+    every group would treat those groups as independent.
+    """
+    groups = [(np.asarray(t, float), np.asarray(e, float)) for t, e in groups]
+    event_times = [t[e == 1] for t, e in groups if np.any(e == 1)]
+    if len(groups) < 2 or not event_times:
+        return np.nan
+    event_times = np.unique(np.concatenate(event_times))
+    k = len(groups)
+    observed = np.zeros(k)
+    expected = np.zeros(k)
+    variance = np.zeros((k, k))
+    for ti in event_times:
+        at_risk = np.array([(t >= ti).sum() for t, _e in groups], float)
+        deaths = np.array([((t == ti) & (e == 1)).sum() for t, e in groups], float)
+        n = at_risk.sum()
+        d = deaths.sum()
+        if n <= 1 or d == 0:
+            continue
+        observed += deaths
+        expected += at_risk * d / n
+        factor = d * (n - d) / (n ** 2 * (n - 1))
+        for a in range(k):
+            variance[a, a] += factor * at_risk[a] * (n - at_risk[a])
+            for b in range(a + 1, k):
+                cov = factor * at_risk[a] * at_risk[b]
+                variance[a, b] -= cov
+                variance[b, a] -= cov
+    diff = (observed - expected)[:-1]
+    vv = variance[:-1, :-1]
+    try:
+        stat = float(diff @ np.linalg.solve(vv, diff))
+    except np.linalg.LinAlgError:
+        return np.nan
+    return float(chi2.sf(stat, df=k - 1))
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -107,7 +131,8 @@ def style_ax(ax, title, xlabel="Time (years)", ylabel="Survival probability"):
 
 
 def add_pval(ax, p):
-    ax.text(0.03, 0.06, f"Log-rank  p = {p:.3f}",
+    label = "Log-rank  p < 0.001" if p < 0.001 else f"Log-rank  p = {p:.3f}"
+    ax.text(0.03, 0.06, label,
             transform=ax.transAxes, fontsize=9,
             color="#444", style="italic")
 
@@ -146,6 +171,10 @@ df = df.dropna(subset=["span_days"]).copy()
 
 df["event"] = (df["ended"] == 1).astype(int)
 df["t"]     = df["span_days"].astype(float)
+bad_time = ~np.isfinite(df["t"]) | (df["t"] <= 0)
+if bad_time.any():
+    print(f"  [INFO] Dropped {int(bad_time.sum())} rows with nonpositive duration")
+    df = df.loc[~bad_time].copy()
 
 
 # ── Derive prior conflict outcome from merged variables ────────────────────

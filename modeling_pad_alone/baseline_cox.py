@@ -1,5 +1,5 @@
 """
-Cox Proportional Hazards Model — Peace Agreement Duration
+Cox Proportional Hazards Model : Peace Agreement Duration
 ==========================================================
 Outcome  : span_days (time to agreement collapse)
 Event    : ended == 1  (agreement collapsed)
@@ -10,11 +10,10 @@ Design choices
 1. Predictors standardized (mean 0, sd 1) before fitting.
    Coefficients back-transformed to original scale for reporting.
 
-2. Interaction terms built as products of STANDARDIZED variables.
-   Because each variable is already mean-centred after standardisation,
-   the product term is orthogonal to both main effects — this removes
-   the lower-order correlations that would otherwise confound the
-   interaction estimate. Main effects are retained in the model.
+2. Interaction terms are products of standardized variables, then
+   residualized on those two main effects and an intercept. Centering
+   alone does not make a product orthogonal to its mains. Main effects
+   are retained in the model.
 
 3. Proportional-hazards assumption tested via the Grambsch-Therneau
    method: Pearson correlation of the scaled Schoenfeld residual with
@@ -33,15 +32,17 @@ Outputs
 -------
   • Console: univariate table, main multivariable table, PH test,
              extended model table
-  • baseline_results.png — five-panel figure:
-      A  Forest plot — univariate HRs
-      B  Forest plot — multivariable HRs (cluster-robust CIs)
+  • baseline_results.png : five-panel figure:
+      A  Forest plot : univariate HRs
+      B  Forest plot : multivariable HRs (cluster-robust CIs)
       C  Breslow baseline cumulative hazard
       D  Schoenfeld residual plots (PH check)
-      E  Forest plot — extended model (time-varying terms)
+      E  Forest plot : extended model (time-varying terms)
 """
 
+import os
 import warnings
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -83,6 +84,14 @@ if n_before != n_after:
 
 df["event"] = (df["ended"] == 1).astype(bool)
 df["t"]     = df["span_days"].astype(float)
+bad_time = ~np.isfinite(df["t"]) | (df["t"] <= 0)
+if bad_time.any():
+    print(f"  [INFO] Dropped {int(bad_time.sum())} rows with nonpositive duration")
+    df = df.loc[~bad_time].copy()
+if (df["termdur"] == -99).any():
+    n_sentinel = int((df["termdur"] == -99).sum())
+    print(f"  [INFO] Recoded termdur -99 to 0 ({n_sentinel} rows)")
+    df["termdur"] = df["termdur"].replace(-99, 0)
 
 print(f"Rows: {len(df)}  |  Events: {int(df['event'].sum())}  "
       f"|  Censored: {int((~df['event']).sum())}  "
@@ -196,11 +205,11 @@ LABELS = {
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2.  BUILD DESIGN MATRIX
-#     Step 1 — extract raw base columns
-#     Step 2 — standardise (mean 0, sd 1)  →  variables are now centred
-#     Step 3 — build interaction terms as products of STANDARDIZED columns
+#     Step 1 : extract raw base columns
+#     Step 2 : standardise (mean 0, sd 1)  →  variables are now centred
+#     Step 3 : build interaction terms as products of STANDARDIZED columns
 #              design matrix {p} columns  (residualized interactions)
-#     Step 4 — stack into X_std  (N × 52)
+#     Step 4 : stack into X_std  (N × 52)
 #     Store X_mean, X_sd for back-transformation of coefficients later.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -248,7 +257,14 @@ t_all       = df["t"].values.astype(float)
 event_bool  = df["event"].values
 event_float = event_bool.astype(float)
 y_surv      = Surv.from_arrays(event=event_bool, time=t_all)
-cluster_ids = df["conflict_id"].values
+cluster_ids = df["conflict_id"].to_numpy()
+# NaN never equals NaN, so agreements with no conflict id would be left out
+# of the sandwich. Give each of them its own cluster instead.
+missing_cluster = pd.isna(cluster_ids)
+if missing_cluster.any():
+    cluster_ids = cluster_ids.astype(object)
+    for i in np.flatnonzero(missing_cluster):
+        cluster_ids[i] = f"unclustered-{i}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3.  CORE HELPERS
@@ -396,7 +412,7 @@ def fit_clustered(X, y, t, event, cluster_ids):
         Hi    = np.linalg.inv(H)
         se_cl = np.sqrt(np.maximum(np.diag(Hi @ B @ Hi), 0))
     except np.linalg.LinAlgError:
-        print("  [WARNING] Hessian singular — clustered SEs unavailable.")
+        print("  [WARNING] Hessian singular : clustered SEs unavailable.")
         se_cl = np.full(q, np.nan)
 
     z_cl = beta / (se_cl + 1e-300)
@@ -528,7 +544,7 @@ print(f"\n  PH violators (p < {PH_ALPHA}):  "
       f"{', '.join(violators) if violators else 'none'}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 7.  EXTENDED MODEL  —  x + x*log(t)  for PH violators
+# 7.  EXTENDED MODEL: x + x*log(t) for PH violators
 #
 #     For each violating covariate x_j, we add a new column:
 #         x_j_std_i  *  log(t_i)
@@ -591,7 +607,7 @@ if violators:
               f"{pv:8.4f} {stars}{marker}")
     print("\n  [tv] = time-varying coefficient term  (x × log(t))")
 else:
-    print("\n  No PH violations detected — extended model not needed.")
+    print("\n  No PH violations detected : extended model not needed.")
     ext        = None
     EXT_ALL    = ALL_NAMES
     FULL_LABELS = LABELS
@@ -625,7 +641,7 @@ n_panels = 5 if ext is not None else 4
 fig_h    = max(22, 4 + len(ALL_NAMES) * 0.35)
 fig = plt.figure(figsize=(20, fig_h), facecolor="#FAFAF7")
 fig.suptitle(
-    "Cox Proportional Hazards Model — Peace Agreement Duration",
+    "Cox Proportional Hazards Model : Peace Agreement Duration",
     fontsize=17, fontweight="bold", y=0.999, color="#1a1a1a",
 )
 fig.text(
@@ -741,7 +757,7 @@ ax_sch.set_xlabel("Time (years)", fontsize=10)
 ax_sch.set_ylabel("Schoenfeld residual", fontsize=10)
 ax_sch.legend(fontsize=7.5, loc="upper right", framealpha=0.85, edgecolor="#ccc")
 
-# ── E. Time-varying terms (PH violators only) — in main figure ───────────────
+# ── E. Time-varying terms (PH violators only) : in main figure ───────────────
 if ax_ext is not None and ext is not None:
     tv_idx = [i for i, col in enumerate(EXT_ALL) if col in EXT_NAMES]
     forest_plot(ax_ext, EXT_NAMES,

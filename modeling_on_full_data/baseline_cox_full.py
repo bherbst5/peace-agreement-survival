@@ -1,5 +1,5 @@
 """
-Cox Proportional Hazards Model — Peace Agreement Duration
+Cox Proportional Hazards Model : Peace Agreement Duration
 ==========================================================
 Outcome  : span_days (time to agreement collapse)
 Event    : ended == 1  (agreement collapsed)
@@ -10,11 +10,10 @@ Design choices
 1. Predictors standardized (mean 0, sd 1) before fitting.
    Coefficients back-transformed to original scale for reporting.
 
-2. Interaction terms built as products of STANDARDIZED variables.
-   Because each variable is already mean-centred after standardisation,
-   the product term is orthogonal to both main effects — this removes
-   the lower-order correlations that would otherwise confound the
-   interaction estimate. Main effects are retained in the model.
+2. Interaction terms are products of standardized variables, then
+   residualized on those two main effects and an intercept. Centering
+   alone does not make a product orthogonal to its mains. Main effects
+   are retained in the model.
 
 3. Proportional-hazards assumption tested via the Grambsch-Therneau
    method: Pearson correlation of the scaled Schoenfeld residual with
@@ -33,15 +32,17 @@ Outputs
 -------
   • Console: univariate table, main multivariable table, PH test,
              extended model table
-  • baseline_results.png — five-panel figure:
-      A  Forest plot — univariate HRs
-      B  Forest plot — multivariable HRs (cluster-robust CIs)
+  • baseline_results.png : five-panel figure:
+      A  Forest plot : univariate HRs
+      B  Forest plot : multivariable HRs (cluster-robust CIs)
       C  Breslow baseline cumulative hazard
       D  Schoenfeld residual plots (PH check)
-      E  Forest plot — extended model (time-varying terms)
+      E  Forest plot : extended model (time-varying terms)
 """
 
+import os
 import warnings
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -85,6 +86,14 @@ if n_before != n_after:
 
 df["event"] = (df["ended"] == 1).astype(bool)
 df["t"]     = df["span_days"].astype(float)
+bad_time = ~np.isfinite(df["t"]) | (df["t"] <= 0)
+if bad_time.any():
+    print(f"  [INFO] Dropped {int(bad_time.sum())} rows with nonpositive duration")
+    df = df.loc[~bad_time].copy()
+if (df["termdur"] == -99).any():
+    n_sentinel = int((df["termdur"] == -99).sum())
+    print(f"  [INFO] Recoded termdur -99 to 0 ({n_sentinel} rows)")
+    df["termdur"] = df["termdur"].replace(-99, 0)
 
 print(f"Rows: {len(df)}  |  Events: {int(df['event'].sum())}  "
       f"|  Censored: {int((~df['event']).sum())}  "
@@ -147,7 +156,7 @@ EXTERNAL_CONT = [
     "gdp_growth",         # Hegre & Sambanis 2006 + Walter 2015: economic growth (t-1)
     "log_milper",         # Hegre & Sambanis 2006: state military size (log)
     "v2x_polyarchy",      # V-Dem electoral democracy index (0-1)
-    "log_v2regdur",       # Regime duration in days (log) — regime stability
+    "log_v2regdur",       # Regime duration in days (log) : regime stability
     "v2x_freexp_altinf",  # Walter 2015: media freedom (0-1)
     "v2x_liberal",        # Walter 2015: liberal political institutions (0-1)
     "v2x_partip",         # Walter 2015: political participation (0-1)
@@ -270,11 +279,11 @@ LABELS = {
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2.  BUILD DESIGN MATRIX
-#     Step 1 — extract raw base columns
-#     Step 2 — standardise (mean 0, sd 1)  →  variables are now centred
-#     Step 3 — build interaction terms as products of STANDARDIZED columns
+#     Step 1 : extract raw base columns
+#     Step 2 : standardise (mean 0, sd 1)  →  variables are now centred
+#     Step 3 : build interaction terms as products of STANDARDIZED columns
 #              design matrix {p} columns  (residualized interactions)
-#     Step 4 — stack into X_std  (N × 52)
+#     Step 4 : stack into X_std  (N × 52)
 #     Store X_mean, X_sd for back-transformation of coefficients later.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -323,7 +332,14 @@ t_all       = df["t"].values.astype(float)
 event_bool  = df["event"].values
 event_float = event_bool.astype(float)
 y_surv      = Surv.from_arrays(event=event_bool, time=t_all)
-cluster_ids = df["conflict_id"].values
+cluster_ids = df["conflict_id"].to_numpy()
+# NaN never equals NaN, so agreements with no conflict id would be left out
+# of the sandwich. Give each of them its own cluster instead.
+missing_cluster = pd.isna(cluster_ids)
+if missing_cluster.any():
+    cluster_ids = cluster_ids.astype(object)
+    for i in np.flatnonzero(missing_cluster):
+        cluster_ids[i] = f"unclustered-{i}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3.  CORE HELPERS
@@ -471,7 +487,7 @@ def fit_clustered(X, y, t, event, cluster_ids):
         Hi    = np.linalg.inv(H)
         se_cl = np.sqrt(np.maximum(np.diag(Hi @ B @ Hi), 0))
     except np.linalg.LinAlgError:
-        print("  [WARNING] Hessian singular — clustered SEs unavailable.")
+        print("  [WARNING] Hessian singular : clustered SEs unavailable.")
         se_cl = np.full(q, np.nan)
 
     z_cl = beta / (se_cl + 1e-300)
@@ -603,7 +619,7 @@ print(f"\n  PH violators (p < {PH_ALPHA}):  "
       f"{', '.join(violators) if violators else 'none'}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 7.  EXTENDED MODEL  —  x + x*log(t)  for PH violators
+# 7.  EXTENDED MODEL: x + x*log(t) for PH violators
 #
 #     Correct approach: person-period (start-stop / counting process) expansion.
 #
@@ -614,10 +630,10 @@ print(f"\n  PH violators (p < {PH_ALPHA}):  "
 #     is evaluated for event t_k we only use information available then.
 #
 #     Dataset structure:
-#         t_start  — previous failure time (0 for the first interval)
-#         t_stop   — current failure time t_k
-#         event    — 1 only for the observation whose event occurs at t_k
-#         x_j * log(t_k) — interaction evaluated at t_k for everyone at risk
+#         t_start  : previous failure time (0 for the first interval)
+#         t_stop   : current failure time t_k
+#         event    : 1 only for the observation whose event occurs at t_k
+#         x_j * log(t_k) : interaction evaluated at t_k for everyone at risk
 #
 #     The extended model estimates:
 #         beta(t) = beta_1  +  beta_2 * log(t)
@@ -738,9 +754,9 @@ if violators:
     sm_res_base = sm_model.fit(method='bfgs', maxiter=1000, disp=False)
     sm_res      = sm_model.fit(groups=cluster_pp, method = 'bfgs', maxiter=1000, disp=False)
 
-    print(f"\n  Diagnostic — params NaN (base / clustered): "
+    print(f"\n  Diagnostic : params NaN (base / clustered): "
           f"{np.isnan(sm_res_base.params).sum()} / {np.isnan(sm_res.params).sum()}")
-    print(f"  Diagnostic — bse NaN   (base / clustered): "
+    print(f"  Diagnostic : bse NaN   (base / clustered): "
           f"{np.isnan(sm_res_base.bse).sum()} / {np.isnan(sm_res.bse).sum()}")
 
     # ── Cluster-robust SEs: manual Lin-Wei sandwich if statsmodels returns NaN ─
@@ -751,7 +767,7 @@ if violators:
     #  sᵢ are the per-row score residuals from the un-clustered fit.
 
     if np.isnan(sm_res.bse).any():
-        print("  Clustered bse is NaN — computing sandwich manually.")
+        print("  Clustered bse is NaN : computing sandwich manually.")
         score_r = sm_res_base.score_residuals          # shape (n_rows, n_params)
         H_inv   = sm_res_base.cov_params()             # shape (n_params, n_params)
 
@@ -799,7 +815,7 @@ if violators:
               f"{pv:8.4f} {stars}{marker}")
     print("\n  [tv] = time-varying coefficient term  (x × log(t))")
 else:
-    print("\n  No PH violations detected — extended model not needed.")
+    print("\n  No PH violations detected : extended model not needed.")
     ext        = None
     EXT_ALL    = ALL_NAMES
     FULL_LABELS = LABELS
@@ -835,7 +851,7 @@ n_panels = 5 if ext is not None else 4
 fig_h = max(28, 6 + len(ALL_NAMES) * 0.42)
 fig = plt.figure(figsize=(20, fig_h), facecolor="#FAFAF7")
 fig.suptitle(
-    "Cox Proportional Hazards Model — Peace Agreement Duration",
+    "Cox Proportional Hazards Model : Peace Agreement Duration",
     fontsize=17, fontweight="bold", y=0.995, color="#1a1a1a",
 )
 fig.text(
@@ -904,7 +920,7 @@ def forest_plot(ax, names, hr_arr, lo_arr, hi_arr, p_arr,
         if xlim[0] <= hr <= xlim[1]:
             ax.scatter(hr, yi, color=c, s=50, zorder=5, marker=mk)
         else:
-            # Centre point off-graph — print HR value at the boundary
+            # Centre point off-graph : print HR value at the boundary
             side  = xlim[0] if hr < xlim[0] else xlim[1]
             arrow = "<" if hr < xlim[0] else ">"
             ax.scatter(side, yi, color=c, s=60, marker=arrow,
@@ -967,7 +983,7 @@ if ext is not None:
     )
     forest_plot(
         ax_multi, b_names, b_hr, b_lo, b_hi, b_p,
-        "Non-PH Covariates — Extended Model",
+        "Non-PH Covariates : Extended Model",
         color="#117AD6",
     )
 else:
@@ -991,7 +1007,7 @@ ax_bh.set_xlabel("Time (years)", fontsize=10)
 ax_bh.set_ylabel("H₀(t)", fontsize=10)
 ax_bh.set_xlim(left=0); ax_bh.set_ylim(bottom=0)
 
-# ── D. Schoenfeld residuals — PH-violating variables only ────────────────────
+# ── D. Schoenfeld residuals : PH-violating variables only ────────────────────
 # Show the variables that *failed* the PH test: these are the ones the plot is
 # meant to diagnose.  Cap at 12 for readability.
 # When violations exist, show only the violating variables.
@@ -1001,11 +1017,11 @@ DEFAULT_SCH_COLS = ["cease", "pko", "intgov", "natalks", "reaffirm", "termdur"]
 
 if violators:
     show_cols = violators[:12] if len(violators) > 12 else violators
-    d_title   = (f"Schoenfeld Residuals — {len(show_cols)} PH-Violating "
+    d_title   = (f"Schoenfeld Residuals : {len(show_cols)} PH-Violating "
                  f"Variables (p\u00a0<\u00a0{PH_ALPHA})")
 else:
     show_cols = [c for c in DEFAULT_SCH_COLS if c in ALL_NAMES]
-    d_title   = ("Schoenfeld Residuals — Key Variables\n"
+    d_title   = ("Schoenfeld Residuals : Key Variables\n"
                  "No PH violations detected; flat smoother confirms assumption holds")
 
 colors_sch  = [PALETTE[i % len(PALETTE)] for i in range(len(show_cols))]
@@ -1043,8 +1059,8 @@ if all_smooths:
     ax_sch.set_ylim(concat.min() - y_pad, concat.max() + y_pad)
 
 # ── E. PH-violating covariates: base coefficient + time interaction ───────────
-# Each PH-violating variable requires *two* rows — the base term (β₁) and the
-# interaction term (β₂) — because the full effect is β₁ + β₂·log(t).
+# Each PH-violating variable requires two rows, the base term (β₁) and the
+# interaction term (β₂), because the full effect is β₁ + β₂·log(t).
 # Reading β₁ alone is misleading: it is only the log-HR when log(t) = 0,
 # i.e. t = 1 day (given the +1 offset).  Both rows are shown together so the
 # reader can evaluate the direction and magnitude of time-dependence.
@@ -1093,7 +1109,7 @@ if ax_ext is not None and ext is not None:
     ax_ext.xaxis.set_major_formatter(mticker.ScalarFormatter())
     ax_ext.set_xlim(0.05, 20)
     ax_ext.set_title(
-        f"PH-Violating Covariates — Base Coefficient (●/◆) + Time Interaction (■)  [β₁ + β₂·log(t)]\n"
+        f"PH-Violating Covariates : Base Coefficient (●/◆) + Time Interaction (■)  [β₁ + β₂·log(t)]\n"
         f"Orange = base term β₁  (log-HR at t = 1 day);  Purple = interaction β₂  (log-HR change per unit log(t))  ",
         fontsize=11, fontweight="bold", pad=10,
         fontfamily="DejaVu Sans"
